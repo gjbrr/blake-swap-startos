@@ -37,6 +37,18 @@ const dict = {
   'Blocks': 26,
   'Headers': 27,
   'Verification Progress': 28,
+  'BTC RPC URL': 29,
+  'HTTPS URL for an ordinary Bitcoin RPC endpoint.': 30,
+  'BTC RPC Username': 31,
+  'RPC username for the ordinary Bitcoin node.': 32,
+  'BTC RPC Password': 33,
+  'RPC password used only for this connectivity check and not saved by BLAKE Swap.': 34,
+  'Check BTC RPC': 35,
+  'Check read-only connectivity to an ordinary Bitcoin node using getblockchaininfo.': 36,
+  'BTC RPC URL must use HTTPS.': 37,
+  'BTC RPC check failed.': 38,
+  'BTC RPC': 39,
+  'BTC RPC check completed successfully.': 40,
 } as const
 
 /**
