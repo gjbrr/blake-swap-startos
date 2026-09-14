@@ -5,9 +5,9 @@ export const manifest = setupManifest({
   id: 'blake-swap',
   title: 'BLAKE Swap',
   license: '', // Upstream license not yet established
-  packageRepo: '', // Packaging repository not yet published
-  upstreamRepo: '', // Upstream repository URL not yet established
-  marketingUrl: '', // Project website not yet established
+  packageRepo: 'https://blake-swap-startos.invalid/', // Private alpha: repository not yet published
+  upstreamRepo: 'https://blake-swap-upstream.invalid/', // Private alpha: upstream URL not yet established
+  marketingUrl: 'https://blake-swap.invalid/', // Private alpha: project website not yet established
   donationUrl: null,
   description: { short, long },
   // 'example-volume' is an arbitrary id — name volumes whatever suits the
@@ -23,5 +23,11 @@ export const manifest = setupManifest({
       arch: ['x86_64'],
     },
   },
-  dependencies: {},
+  dependencies: {
+    bitcoind: {
+      description: 'Provides Bitcoin blockchain data for BLAKE Swap.',
+      optional: false,
+      s9pk: null,
+    },
+  },
 })

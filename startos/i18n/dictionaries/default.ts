@@ -25,6 +25,18 @@ const dict = {
   'Marker': 16,
   'Persistence marker operation failed.': 17,
   'Persistence marker is missing or invalid.': 18,
+
+  // actions/checkBitcoinRpc.ts
+  'Check Bitcoin RPC': 19,
+  'Check read-only connectivity to the Bitcoin service using getblockchaininfo.': 20,
+  'Bitcoin RPC is unavailable.': 21,
+  'Bitcoin RPC check failed.': 22,
+  'Bitcoin RPC': 23,
+  'Bitcoin RPC check completed successfully.': 24,
+  'Chain': 25,
+  'Blocks': 26,
+  'Headers': 27,
+  'Verification Progress': 28,
 } as const
 
 /**
