@@ -1,17 +1,17 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 
-const BITCOIN_PACKAGE_ID = 'bitcoind'
-const BITCOIN_RPC_HOST_ID = 'rpc'
-const BITCOIN_RPC_INTERNAL_PORT = 8332
+const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
+const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
+const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
-export const checkBitcoinRpc = sdk.Action.withoutInput(
-  'check-bitcoin-rpc',
+export const checkBlakeRpc = sdk.Action.withoutInput(
+  'check-blake-rpc',
 
   async () => ({
-    name: i18n('Check Bitcoin RPC'),
+    name: i18n('Check BLAKE RPC'),
     description: i18n(
-      'Check read-only connectivity to the Bitcoin service using getblockchaininfo.',
+      'Check read-only connectivity to the BLAKE/RDTS service using getblockchaininfo.',
     ),
     warning: null,
     allowedStatuses: 'any',
@@ -23,19 +23,19 @@ export const checkBitcoinRpc = sdk.Action.withoutInput(
   async ({ effects }) => {
     const rpcAddr = await sdk.host
       .getBridgeAddress(effects, {
-        packageId: BITCOIN_PACKAGE_ID,
-        hostId: BITCOIN_RPC_HOST_ID,
-        internalPort: BITCOIN_RPC_INTERNAL_PORT,
+        packageId: BLAKE_PROVIDER_PACKAGE_ID,
+        hostId: BLAKE_PROVIDER_RPC_HOST_ID,
+        internalPort: BLAKE_PROVIDER_RPC_INTERNAL_PORT,
         ssl: false,
       })
       .once()
 
     if (!rpcAddr) {
-      throw new Error(i18n('Bitcoin RPC is unavailable.'))
+      throw new Error(i18n('BLAKE RPC is unavailable.'))
     }
 
     const mounts = sdk.Mounts.of().mountDependency({
-      dependencyId: BITCOIN_PACKAGE_ID,
+      dependencyId: BLAKE_PROVIDER_PACKAGE_ID,
       volumeId: 'main',
       subpath: null,
       mountpoint: '/mnt/bitcoind',
@@ -46,7 +46,7 @@ export const checkBitcoinRpc = sdk.Action.withoutInput(
       effects,
       { imageId: 'blake-swap' },
       mounts,
-      'check-bitcoin-rpc',
+      'check-blake-rpc',
       async sub => {
         const python = `
 import base64
@@ -59,7 +59,7 @@ rpc_addr = sys.argv[1]
 cookie_path = Path("/mnt/bitcoind/.cookie")
 
 if not cookie_path.is_file():
-    raise SystemExit("Bitcoin RPC cookie is unavailable")
+    raise SystemExit("BLAKE RPC cookie is unavailable")
 
 cookie = cookie_path.read_text().strip()
 
@@ -84,7 +84,7 @@ with urllib.request.urlopen(req, timeout=10) as response:
     payload = json.loads(response.read().decode())
 
 if payload.get("error") is not None:
-    raise SystemExit("Bitcoin RPC returned an error")
+    raise SystemExit("BLAKE RPC returned an error")
 
 info = payload["result"]
 
@@ -104,7 +104,7 @@ print(json.dumps({
         ])
 
         if (execResult.exitCode !== 0) {
-          throw new Error(i18n('Bitcoin RPC check failed.'))
+          throw new Error(i18n('BLAKE RPC check failed.'))
         }
 
         return JSON.parse(execResult.stdout.toString())
@@ -113,8 +113,8 @@ print(json.dumps({
 
     return {
       version: '1',
-      title: i18n('Bitcoin RPC'),
-      message: i18n('Bitcoin RPC check completed successfully.'),
+      title: i18n('BLAKE RPC'),
+      message: i18n('BLAKE RPC check completed successfully.'),
       result: {
         type: 'group',
         value: [

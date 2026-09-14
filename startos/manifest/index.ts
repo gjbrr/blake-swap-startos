@@ -25,7 +25,7 @@ export const manifest = setupManifest({
   },
   dependencies: {
     bitcoind: {
-      description: 'Provides Bitcoin blockchain data for BLAKE Swap.',
+      description: 'Provides the BLAKE/RDTS blockchain backend for BLAKE Swap.',
       optional: false,
       s9pk: null,
     },
