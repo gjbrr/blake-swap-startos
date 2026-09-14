@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+*.swp
+.env
+.venv/
+
+# Generated participant profile
+scripts/participant-env
