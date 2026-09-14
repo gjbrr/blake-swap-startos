@@ -55,6 +55,10 @@ export default {
     50: 'BTC provider configuration saved successfully.',
     51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
     52: 'Configure the BTC provider before checking BTC RPC.',
+    53: 'Initial Block Download',
+    54: 'Economic Readiness',
+    55: 'Ready',
+    56: 'Not Ready',
   },
   de_DE: {
     0: 'Starte BLAKE Swap!',
@@ -110,6 +114,10 @@ export default {
     50: 'BTC provider configuration saved successfully.',
     51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
     52: 'Configure the BTC provider before checking BTC RPC.',
+    53: 'Initial Block Download',
+    54: 'Economic Readiness',
+    55: 'Ready',
+    56: 'Not Ready',
   },
   pl_PL: {
     0: 'Uruchamianie BLAKE Swap!',
@@ -165,6 +173,10 @@ export default {
     50: 'BTC provider configuration saved successfully.',
     51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
     52: 'Configure the BTC provider before checking BTC RPC.',
+    53: 'Initial Block Download',
+    54: 'Economic Readiness',
+    55: 'Ready',
+    56: 'Not Ready',
   },
   fr_FR: {
     0: 'Démarrage de BLAKE Swap !',
@@ -220,5 +232,9 @@ export default {
     50: 'BTC provider configuration saved successfully.',
     51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
     52: 'Configure the BTC provider before checking BTC RPC.',
+    53: 'Initial Block Download',
+    54: 'Economic Readiness',
+    55: 'Ready',
+    56: 'Not Ready',
   },
 } satisfies Record<string, LangDict>

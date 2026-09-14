@@ -91,6 +91,7 @@ print(json.dumps({
     "blocks": info.get("blocks"),
     "headers": info.get("headers"),
     "verificationprogress": info.get("verificationprogress"),
+    "initialblockdownload": info.get("initialblockdownload"),
 }))
 `.trim()
 
@@ -112,6 +113,10 @@ print(json.dumps({
         return JSON.parse(execResult.stdout.toString())
       },
     )
+
+    const economicallyReady =
+      result.chain === 'main' &&
+      result.initialblockdownload === false
 
     return {
       version: '1',
@@ -152,6 +157,26 @@ print(json.dumps({
             name: i18n('Verification Progress'),
             description: null,
             value: String(result.verificationprogress),
+            masked: false,
+            copyable: false,
+            qr: false,
+          },
+          {
+            type: 'single',
+            name: i18n('Initial Block Download'),
+            description: null,
+            value: String(result.initialblockdownload),
+            masked: false,
+            copyable: false,
+            qr: false,
+          },
+          {
+            type: 'single',
+            name: i18n('Economic Readiness'),
+            description: null,
+            value: economicallyReady
+              ? i18n('Ready')
+              : i18n('Not Ready'),
             masked: false,
             copyable: false,
             qr: false,

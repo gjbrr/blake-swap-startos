@@ -61,6 +61,10 @@ const dict = {
   'BTC provider configuration saved successfully.': 50,
   'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.': 51,
   'Configure the BTC provider before checking BTC RPC.': 52,
+  'Initial Block Download': 53,
+  'Economic Readiness': 54,
+  'Ready': 55,
+  'Not Ready': 56,
 } as const
 
 /**
