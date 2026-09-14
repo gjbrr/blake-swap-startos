@@ -1,60 +1,14 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
+import { btcProvider } from '../file-models/btcProvider'
 
-const { InputSpec, Value } = sdk
-
-const inputSpec = InputSpec.of({
-  rpcUrl: Value.text({
-    name: i18n('BTC RPC URL'),
-    description: i18n(
-      'HTTPS URL for an ordinary Bitcoin RPC endpoint.',
-    ),
-    required: true,
-    default: null,
-    placeholder: 'https://bitcoin-rpc.example:8332/',
-    masked: false,
-  }),
-
-  rpcUsername: Value.text({
-    name: i18n('BTC RPC Username'),
-    description: i18n(
-      'RPC username for the ordinary Bitcoin node.',
-    ),
-    required: true,
-    default: null,
-    masked: false,
-  }),
-
-  rpcPassword: Value.text({
-    name: i18n('BTC RPC Password'),
-    description: i18n(
-      'RPC password used only for this connectivity check and not saved by BLAKE Swap.',
-    ),
-    required: true,
-    default: null,
-    masked: true,
-  }),
-
-  trustedCaPem: Value.textarea({
-    name: i18n('Trusted CA Certificate (PEM)'),
-    description: i18n(
-      'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
-    ),
-    required: true,
-    default: null,
-    minRows: 5,
-    maxRows: 10,
-    placeholder: '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
-  }),
-})
-
-export const checkBtcRpc = sdk.Action.withInput(
+export const checkBtcRpc = sdk.Action.withoutInput(
   'check-btc-rpc',
 
   async () => ({
     name: i18n('Check BTC RPC'),
     description: i18n(
-      'Check read-only connectivity to an ordinary Bitcoin node using getblockchaininfo.',
+      'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
     ),
     warning: null,
     allowedStatuses: 'any',
@@ -63,12 +17,16 @@ export const checkBtcRpc = sdk.Action.withInput(
     access: 'user',
   }),
 
-  inputSpec,
+  async ({ effects }) => {
+    const saved = await btcProvider.read().const(effects)
 
-  async () => ({}),
+    if (!saved) {
+      throw new Error(
+        i18n('Configure the BTC provider before checking BTC RPC.'),
+      )
+    }
 
-  async ({ effects, input }) => {
-    const rpcUrl = input.rpcUrl.trim()
+    const rpcUrl = saved.rpcUrl.trim()
 
     if (!rpcUrl.startsWith('https://')) {
       throw new Error(i18n('BTC RPC URL must use HTTPS.'))
@@ -137,17 +95,12 @@ print(json.dumps({
 `.trim()
 
         const execResult = await sub.exec(
-          [
-            'python3',
-            '-c',
-            python,
-            rpcUrl,
-          ],
+          ['python3', '-c', python, rpcUrl],
           {
             input: JSON.stringify({
-              username: input.rpcUsername,
-              password: input.rpcPassword,
-              trustedCaPem: input.trustedCaPem,
+              username: saved.rpcUsername,
+              password: saved.rpcPassword,
+              trustedCaPem: saved.trustedCaPem,
             }),
           },
         )

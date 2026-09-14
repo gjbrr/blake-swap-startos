@@ -53,6 +53,8 @@ export default {
     48: 'BTC RPC password is required for initial configuration.',
     49: 'BTC Provider',
     50: 'BTC provider configuration saved successfully.',
+    51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
+    52: 'Configure the BTC provider before checking BTC RPC.',
   },
   de_DE: {
     0: 'Starte BLAKE Swap!',
@@ -106,6 +108,8 @@ export default {
     48: 'BTC RPC password is required for initial configuration.',
     49: 'BTC Provider',
     50: 'BTC provider configuration saved successfully.',
+    51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
+    52: 'Configure the BTC provider before checking BTC RPC.',
   },
   pl_PL: {
     0: 'Uruchamianie BLAKE Swap!',
@@ -159,6 +163,8 @@ export default {
     48: 'BTC RPC password is required for initial configuration.',
     49: 'BTC Provider',
     50: 'BTC provider configuration saved successfully.',
+    51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
+    52: 'Configure the BTC provider before checking BTC RPC.',
   },
   fr_FR: {
     0: 'Démarrage de BLAKE Swap !',
@@ -212,5 +218,7 @@ export default {
     48: 'BTC RPC password is required for initial configuration.',
     49: 'BTC Provider',
     50: 'BTC provider configuration saved successfully.',
+    51: 'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.',
+    52: 'Configure the BTC provider before checking BTC RPC.',
   },
 } satisfies Record<string, LangDict>

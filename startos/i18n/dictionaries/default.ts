@@ -59,6 +59,8 @@ const dict = {
   'BTC RPC password is required for initial configuration.': 48,
   'BTC Provider': 49,
   'BTC provider configuration saved successfully.': 50,
+  'Check read-only connectivity to the saved ordinary Bitcoin node using getblockchaininfo.': 51,
+  'Configure the BTC provider before checking BTC RPC.': 52,
 } as const
 
 /**
