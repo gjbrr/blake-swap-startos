@@ -82,6 +82,19 @@ BTC_RPC_ARGS = tuple(
     )
 )
 
+# Regtest historically confirms transactions by mining immediately.
+# Production integrations such as StartOS disable this and let normal
+# chain confirmation + resume/reconciliation advance durable state.
+AUTO_MINE = os.environ.get(
+    "BLAKE_SWAP_AUTO_MINE",
+    "1",
+).strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
 ALICE_WALLET = "alice"
 BOB_WALLET = "bob"
 
@@ -591,8 +604,10 @@ def print_swap(swap):
 def blake_cli(*args, wallet=None):
     cmd = [
         BLAKE_CLI,
-        "-regtest",
     ]
+
+    if AUTO_MINE:
+        cmd.append("-regtest")
 
     if BLAKE_DATADIR:
         cmd.append(
