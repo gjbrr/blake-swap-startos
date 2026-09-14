@@ -34,6 +34,18 @@ const inputSpec = InputSpec.of({
     default: null,
     masked: true,
   }),
+
+  trustedCaPem: Value.textarea({
+    name: i18n('Trusted CA Certificate (PEM)'),
+    description: i18n(
+      'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
+    ),
+    required: true,
+    default: null,
+    minRows: 5,
+    maxRows: 10,
+    placeholder: '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
+  }),
 })
 
 export const checkBtcRpc = sdk.Action.withInput(
@@ -71,14 +83,19 @@ export const checkBtcRpc = sdk.Action.withInput(
         const python = `
 import base64
 import json
+import ssl
 import sys
 import urllib.request
 
 rpc_url = sys.argv[1]
 
-credentials_input = json.loads(sys.stdin.read())
-rpc_username = credentials_input["username"]
-rpc_password = credentials_input["password"]
+connection_input = json.loads(sys.stdin.read())
+rpc_username = connection_input["username"]
+rpc_password = connection_input["password"]
+trusted_ca_pem = connection_input["trustedCaPem"]
+
+ssl_context = ssl.create_default_context()
+ssl_context.load_verify_locations(cadata=trusted_ca_pem)
 
 request_body = json.dumps({
     "jsonrpc": "1.0",
@@ -99,7 +116,11 @@ req = urllib.request.Request(
     method="POST",
 )
 
-with urllib.request.urlopen(req, timeout=10) as response:
+with urllib.request.urlopen(
+    req,
+    context=ssl_context,
+    timeout=10,
+) as response:
     payload = json.loads(response.read().decode())
 
 if payload.get("error") is not None:
@@ -126,6 +147,7 @@ print(json.dumps({
             input: JSON.stringify({
               username: input.rpcUsername,
               password: input.rpcPassword,
+              trustedCaPem: input.trustedCaPem,
             }),
           },
         )

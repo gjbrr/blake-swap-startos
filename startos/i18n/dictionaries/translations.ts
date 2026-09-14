@@ -43,6 +43,8 @@ export default {
     38: 'BTC RPC check failed.',
     39: 'BTC RPC',
     40: 'BTC RPC check completed successfully.',
+    41: 'Trusted CA Certificate (PEM)',
+    42: 'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
   },
   de_DE: {
     0: 'Starte BLAKE Swap!',
@@ -86,6 +88,8 @@ export default {
     38: 'BTC RPC check failed.',
     39: 'BTC RPC',
     40: 'BTC RPC check completed successfully.',
+    41: 'Trusted CA Certificate (PEM)',
+    42: 'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
   },
   pl_PL: {
     0: 'Uruchamianie BLAKE Swap!',
@@ -129,6 +133,8 @@ export default {
     38: 'BTC RPC check failed.',
     39: 'BTC RPC',
     40: 'BTC RPC check completed successfully.',
+    41: 'Trusted CA Certificate (PEM)',
+    42: 'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
   },
   fr_FR: {
     0: 'Démarrage de BLAKE Swap !',
@@ -172,5 +178,7 @@ export default {
     38: 'BTC RPC check failed.',
     39: 'BTC RPC',
     40: 'BTC RPC check completed successfully.',
+    41: 'Trusted CA Certificate (PEM)',
+    42: 'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.',
   },
 } satisfies Record<string, LangDict>

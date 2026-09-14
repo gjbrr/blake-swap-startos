@@ -49,6 +49,8 @@ const dict = {
   'BTC RPC check failed.': 38,
   'BTC RPC': 39,
   'BTC RPC check completed successfully.': 40,
+  'Trusted CA Certificate (PEM)': 41,
+  'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.': 42,
 } as const
 
 /**
