@@ -51,6 +51,14 @@ const dict = {
   'BTC RPC check completed successfully.': 40,
   'Trusted CA Certificate (PEM)': 41,
   'PEM-encoded CA certificate used to verify the Bitcoin RPC HTTPS endpoint.': 42,
+  'Configure BTC Provider': 43,
+  'Save the external ordinary Bitcoin RPC connection used by BLAKE Swap.': 44,
+  'Enter a password to set or replace it. Leave blank to keep the currently saved password.': 45,
+  'BTC RPC username must not be empty.': 46,
+  'Trusted CA must be a PEM certificate.': 47,
+  'BTC RPC password is required for initial configuration.': 48,
+  'BTC Provider': 49,
+  'BTC provider configuration saved successfully.': 50,
 } as const
 
 /**
