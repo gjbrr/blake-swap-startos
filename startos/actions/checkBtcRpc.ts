@@ -1,6 +1,7 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import { btcProvider } from '../file-models/btcProvider'
+import { isBtcEconomicallyReady } from '../lib/btcReadiness'
 
 export const checkBtcRpc = sdk.Action.withoutInput(
   'check-btc-rpc',
@@ -115,8 +116,7 @@ print(json.dumps({
     )
 
     const economicallyReady =
-      result.chain === 'main' &&
-      result.initialblockdownload === false
+      isBtcEconomicallyReady(result)
 
     return {
       version: '1',
