@@ -82,6 +82,21 @@ BTC_RPC_ARGS = tuple(
     )
 )
 
+# Chain selection and confirmation policy are intentionally separate.
+# Existing development/test behavior remains BLAKE regtest + auto-mining.
+BLAKE_NETWORK = os.environ.get(
+    "BLAKE_SWAP_BLAKE_NETWORK",
+    "regtest",
+).strip().lower()
+
+if BLAKE_NETWORK not in {
+    "main",
+    "regtest",
+}:
+    raise ValueError(
+        "BLAKE_SWAP_BLAKE_NETWORK must be main or regtest"
+    )
+
 # Regtest historically confirms transactions by mining immediately.
 # Production integrations such as StartOS disable this and let normal
 # chain confirmation + resume/reconciliation advance durable state.
@@ -606,7 +621,7 @@ def blake_cli(*args, wallet=None):
         BLAKE_CLI,
     ]
 
-    if AUTO_MINE:
+    if BLAKE_NETWORK == "regtest":
         cmd.append("-regtest")
 
     if BLAKE_DATADIR:
@@ -1401,6 +1416,9 @@ def recover_blake_funding(swap, address):
     txid, vout, blockhash = found
 
     if not blockhash:
+        if not AUTO_MINE:
+            return txid, vout, None
+
         mine_blake(1)
         tx = blake_cli(
             "gettransaction",
@@ -1409,11 +1427,11 @@ def recover_blake_funding(swap, address):
         )
         blockhash = tx.get("blockhash")
 
-    if not blockhash:
-        raise RuntimeError(
-            "Recovered BLAKE funding transaction "
-            "but could not confirm it"
-        )
+        if not blockhash:
+            raise RuntimeError(
+                "Recovered BLAKE funding transaction "
+                "but could not confirm it"
+            )
 
     return txid, vout, blockhash
 
@@ -1741,42 +1759,82 @@ def command_fund_blake(args):
             wallet=BLAKE_WALLET,
         )
 
-        blockhash = mine_blake(1)[0]
+        if AUTO_MINE:
+            blockhash = mine_blake(1)[0]
 
-        tx = blake_cli(
-            "getrawtransaction",
-            txid,
-            True,
-            blockhash,
-        )
-
-        contract_vout = None
-
-        for output in tx["vout"]:
-            actual_address = (
-                output
-                .get("scriptPubKey", {})
-                .get("address")
+            tx = blake_cli(
+                "getrawtransaction",
+                txid,
+                True,
+                blockhash,
             )
 
-            if (
-                abs(
-                    output["value"]
-                    - swap.blake_amount
-                ) < 0.00000001
-                and actual_address == address
-            ):
-                contract_vout = output["n"]
-                break
+            contract_vout = None
 
-        if contract_vout is None:
-            raise RuntimeError(
-                "Could not locate BLAKE contract output"
+            for output in tx["vout"]:
+                actual_address = (
+                    output
+                    .get("scriptPubKey", {})
+                    .get("address")
+                )
+
+                if (
+                    abs(
+                        output["value"]
+                        - swap.blake_amount
+                    ) < 0.00000001
+                    and actual_address == address
+                ):
+                    contract_vout = output["n"]
+                    break
+
+            if contract_vout is None:
+                raise RuntimeError(
+                    "Could not locate BLAKE contract output"
+                )
+        else:
+            pending = recover_blake_funding(
+                swap,
+                address,
             )
+
+            if pending is None:
+                raise RuntimeError(
+                    "BLAKE funding was broadcast but could "
+                    "not be recovered from the wallet"
+                )
+
+            recovered_txid, contract_vout, blockhash = pending
+
+            if recovered_txid != txid:
+                raise RuntimeError(
+                    "Recovered BLAKE funding txid does not "
+                    "match the transaction just broadcast"
+                )
 
     swap.blake_funding_txid = txid
     swap.blake_funding_vout = contract_vout
     swap.blake_funding_blockhash = blockhash
+
+    if not blockhash:
+        save_swap(
+            swap,
+            role="alice",
+        )
+
+        print()
+        print("BLAKE FUNDING BROADCAST")
+        print("=======================")
+        print("txid:   ", txid)
+        print("vout:   ", contract_vout)
+        print("block:   pending")
+        print("state:  ", swap.state)
+        print()
+        print(
+            "Awaiting normal BLAKE chain confirmation; "
+            "funding intent remains active."
+        )
+        return
 
     swap.transition(
         State.BLAKE_FUNDED

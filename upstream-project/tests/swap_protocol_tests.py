@@ -218,7 +218,13 @@ def run(cmd, *, env=None, expect_ok=True, echo=False) -> subprocess.CompletedPro
 ensure_test_participant_keys()
 
 
-def swap_cmd(*args, role=None, expect_ok=True, echo=False):
+def swap_cmd(
+    *args,
+    role=None,
+    expect_ok=True,
+    echo=False,
+    extra_env=None,
+):
     env = {}
 
     # Tests must never discover or publish against the
@@ -254,6 +260,9 @@ def swap_cmd(*args, role=None, expect_ok=True, echo=False):
                 f"unknown swap role: {role}"
             )
 
+    if extra_env:
+        env.update(extra_env)
+
     return run(
         [sys.executable, SWAP_V2, *args],
         env=env,
@@ -269,7 +278,14 @@ def btc_cli(*args, wallet=None):
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
-    cmd.extend(str(x) for x in args)
+    def rpc_arg(x):
+        if x is True:
+            return "true"
+        if x is False:
+            return "false"
+        return str(x)
+
+    cmd.extend(rpc_arg(x) for x in args)
     p = run(cmd)
     out = p.stdout.strip()
     try:
@@ -286,7 +302,14 @@ def blake_cli(*args, wallet=None):
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
-    cmd.extend(str(x) for x in args)
+    def rpc_arg(x):
+        if x is True:
+            return "true"
+        if x is False:
+            return "false"
+        return str(x)
+
+    cmd.extend(rpc_arg(x) for x in args)
     p = run(cmd)
     out = p.stdout.strip()
     try:
@@ -1623,7 +1646,7 @@ def test_recovery() -> None:
     # A recovery-safe implementation should discover/reconcile the
     # existing HTLC rather than blindly fund another one.
     # ------------------------------------------------------------
-    crash_blake = make_fresh_swap()
+    crash_blake = make_fresh_swap(blake=0.1)
     handshake(crash_blake)
 
     apath = state_file(crash_blake, "alice")
@@ -1665,9 +1688,191 @@ def test_recovery() -> None:
         ok("BLAKE crash restart refused duplicate funding")
 
     # ------------------------------------------------------------
-    # 4. Same experiment for Bob's BTC funding.
+    # 4. Production-style BLAKE funding must broadcast once,
+    #    remain pending without synthetic mining, then converge
+    #    after an externally mined confirmation.
     # ------------------------------------------------------------
-    crash_btc = make_fresh_swap()
+    pending_blake = make_fresh_swap(blake=0.1)
+    handshake(pending_blake)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+        "BLAKE_SWAP_BLAKE_NETWORK": "regtest",
+    }
+
+    before_sends = {
+        entry.get("txid")
+        for entry in blake_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=ALICE_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    swap_cmd(
+        "fund-blake",
+        pending_blake,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        pending_blake,
+        "alice",
+    )
+
+    first_txid = pending.get(
+        "blake_funding_txid"
+    )
+    first_vout = pending.get(
+        "blake_funding_vout"
+    )
+
+    require(
+        pending.get("state") == "OFFERED",
+        "unconfirmed production BLAKE funding advanced state",
+    )
+    require(
+        first_txid,
+        "pending BLAKE funding did not persist txid",
+    )
+    require(
+        first_vout is not None,
+        "pending BLAKE funding did not persist vout",
+    )
+    require(
+        pending.get("blake_funding_blockhash") is None,
+        "pending BLAKE funding unexpectedly has blockhash",
+    )
+
+    intent = (
+        ALICE_BASE
+        / "funding-intents"
+        / f"{pending_blake}.blake.json"
+    )
+    require(
+        intent.exists(),
+        "pending BLAKE funding cleared its intent too early",
+    )
+
+    after_first_sends = {
+        entry.get("txid")
+        for entry in blake_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=ALICE_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    require(
+        first_txid in (after_first_sends - before_sends),
+        "first production BLAKE funding transaction "
+        "was not visible in wallet history",
+    )
+
+    # Retry before confirmation. This must recover the exact
+    # pending wallet payment and must not create another send.
+    swap_cmd(
+        "fund-blake",
+        pending_blake,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending_again = load_state(
+        pending_blake,
+        "alice",
+    )
+
+    after_second_sends = {
+        entry.get("txid")
+        for entry in blake_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=ALICE_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    require(
+        pending_again.get("state") == "OFFERED",
+        "second pending BLAKE funding invocation advanced state",
+    )
+    require(
+        pending_again.get("blake_funding_txid") == first_txid,
+        "pending BLAKE funding txid changed on retry",
+    )
+    require(
+        pending_again.get("blake_funding_vout") == first_vout,
+        "pending BLAKE funding vout changed on retry",
+    )
+    require(
+        after_second_sends == after_first_sends,
+        "pending BLAKE funding retry created another wallet send",
+    )
+    require(
+        intent.exists(),
+        "pending BLAKE funding retry cleared intent too early",
+    )
+
+    # Confirmation is produced externally, not by swap_v2.py.
+    mine_blake(1)
+
+    swap_cmd(
+        "fund-blake",
+        pending_blake,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        pending_blake,
+        "alice",
+    )
+
+    require(
+        confirmed.get("state") == "BLAKE_FUNDED",
+        "confirmed BLAKE funding did not advance state",
+    )
+    require(
+        confirmed.get("blake_funding_txid") == first_txid,
+        "confirmed BLAKE funding txid changed",
+    )
+    require(
+        confirmed.get("blake_funding_vout") == first_vout,
+        "confirmed BLAKE funding vout changed",
+    )
+    require(
+        confirmed.get("blake_funding_blockhash"),
+        "confirmed BLAKE funding did not record blockhash",
+    )
+    require(
+        not intent.exists(),
+        "confirmed BLAKE funding did not clear intent",
+    )
+
+    ok(
+        "production BLAKE funding waits for real confirmation"
+    )
+
+    # ------------------------------------------------------------
+    # 5. Same experiment for Bob's BTC funding.
+    # ------------------------------------------------------------
+    crash_btc = make_fresh_swap(blake=0.1)
     handshake(crash_btc)
     fund_blake_and_sync(crash_btc)
 
@@ -1713,7 +1918,7 @@ def test_recovery() -> None:
     # Every command here is already a new Python process. This
     # explicitly records that fact as a regression result.
     # ------------------------------------------------------------
-    restart_id = make_fresh_swap()
+    restart_id = make_fresh_swap(blake=0.1)
     handshake(restart_id)
     fund_blake_and_sync(restart_id)
 
