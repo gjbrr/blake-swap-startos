@@ -1,6 +1,9 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
-import { btcProvider } from '../file-models/btcProvider'
+import {
+  BtcBlockchainInfoError,
+  getBtcBlockchainInfo,
+} from '../lib/btcBlockchainInfo'
 import { isBtcEconomicallyReady } from '../lib/btcReadiness'
 
 export const checkBtcRpc = sdk.Action.withoutInput(
@@ -19,101 +22,25 @@ export const checkBtcRpc = sdk.Action.withoutInput(
   }),
 
   async ({ effects }) => {
-    const saved = await btcProvider.read().const(effects)
+    let result
 
-    if (!saved) {
-      throw new Error(
-        i18n('Configure the BTC provider before checking BTC RPC.'),
-      )
-    }
-
-    const rpcUrl = saved.rpcUrl.trim()
-
-    if (!rpcUrl.startsWith('https://')) {
-      throw new Error(i18n('BTC RPC URL must use HTTPS.'))
-    }
-
-    const result = await sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'blake-swap' },
-      sdk.Mounts.of(),
-      'check-btc-rpc',
-      async sub => {
-        const python = `
-import base64
-import json
-import ssl
-import sys
-import urllib.request
-
-rpc_url = sys.argv[1]
-
-connection_input = json.loads(sys.stdin.read())
-rpc_username = connection_input["username"]
-rpc_password = connection_input["password"]
-trusted_ca_pem = connection_input["trustedCaPem"]
-
-ssl_context = ssl.create_default_context()
-ssl_context.load_verify_locations(cadata=trusted_ca_pem)
-
-request_body = json.dumps({
-    "jsonrpc": "1.0",
-    "id": "blake-swap-startos-btc-check",
-    "method": "getblockchaininfo",
-    "params": [],
-}).encode()
-
-credentials = (rpc_username + ":" + rpc_password).encode()
-
-req = urllib.request.Request(
-    rpc_url,
-    data=request_body,
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": "Basic " + base64.b64encode(credentials).decode(),
-    },
-    method="POST",
-)
-
-with urllib.request.urlopen(
-    req,
-    context=ssl_context,
-    timeout=10,
-) as response:
-    payload = json.loads(response.read().decode())
-
-if payload.get("error") is not None:
-    raise SystemExit("BTC RPC returned an error")
-
-info = payload["result"]
-
-print(json.dumps({
-    "chain": info.get("chain"),
-    "blocks": info.get("blocks"),
-    "headers": info.get("headers"),
-    "verificationprogress": info.get("verificationprogress"),
-    "initialblockdownload": info.get("initialblockdownload"),
-}))
-`.trim()
-
-        const execResult = await sub.exec(
-          ['python3', '-c', python, rpcUrl],
-          {
-            input: JSON.stringify({
-              username: saved.rpcUsername,
-              password: saved.rpcPassword,
-              trustedCaPem: saved.trustedCaPem,
-            }),
-          },
-        )
-
-        if (execResult.exitCode !== 0) {
-          throw new Error(i18n('BTC RPC check failed.'))
+    try {
+      result = await getBtcBlockchainInfo(effects)
+    } catch (error) {
+      if (error instanceof BtcBlockchainInfoError) {
+        if (error.code === 'provider-not-configured') {
+          throw new Error(
+            i18n('Configure the BTC provider before checking BTC RPC.'),
+          )
         }
 
-        return JSON.parse(execResult.stdout.toString())
-      },
-    )
+        if (error.code === 'insecure-url') {
+          throw new Error(i18n('BTC RPC URL must use HTTPS.'))
+        }
+      }
+
+      throw new Error(i18n('BTC RPC check failed.'))
+    }
 
     const economicallyReady =
       isBtcEconomicallyReady(result)
