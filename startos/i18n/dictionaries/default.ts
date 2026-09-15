@@ -74,6 +74,13 @@ const dict = {
   'This action only records wallet names. It does not create, load, unlock, sign with, or spend from either wallet.': 63,
   'Chain Wallets': 64,
   'Wallet mapping saved successfully.': 65,
+  'Check Wallet Readiness': 66,
+  'Check whether configured chain wallets exist and are loaded without changing wallet state.': 67,
+  'Wallet Readiness': 68,
+  'Wallet readiness check completed successfully.': 69,
+  'Configured': 70,
+  'Exists': 71,
+  'Loaded': 72,
 } as const
 
 /**
