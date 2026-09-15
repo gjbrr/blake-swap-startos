@@ -1451,6 +1451,9 @@ def recover_btc_funding(swap, address):
     txid, vout, blockhash = found
 
     if not blockhash:
+        if not AUTO_MINE:
+            return txid, vout, None
+
         mine_btc(1)
         tx = btc_cli(
             "gettransaction",
@@ -1459,11 +1462,11 @@ def recover_btc_funding(swap, address):
         )
         blockhash = tx.get("blockhash")
 
-    if not blockhash:
-        raise RuntimeError(
-            "Recovered BTC funding transaction "
-            "but could not confirm it"
-        )
+        if not blockhash:
+            raise RuntimeError(
+                "Recovered BTC funding transaction "
+                "but could not confirm it"
+            )
 
     return txid, vout, blockhash
 
@@ -4542,44 +4545,84 @@ def command_fund_btc(args):
             wallet=BTC_WALLET,
         )
 
-        blockhash = mine_btc(1)[0]
+        if AUTO_MINE:
+            blockhash = mine_btc(1)[0]
 
-        tx = btc_cli(
-            "getrawtransaction",
-            txid,
-            True,
-            blockhash,
-        )
-
-        contract_vout = None
-
-        for output in tx["vout"]:
-            value_sats = int(
-                Decimal(str(output["value"]))
-                * Decimal(100_000_000)
+            tx = btc_cli(
+                "getrawtransaction",
+                txid,
+                True,
+                blockhash,
             )
 
-            actual_address = (
-                output
-                .get("scriptPubKey", {})
-                .get("address")
+            contract_vout = None
+
+            for output in tx["vout"]:
+                value_sats = int(
+                    Decimal(str(output["value"]))
+                    * Decimal(100_000_000)
+                )
+
+                actual_address = (
+                    output
+                    .get("scriptPubKey", {})
+                    .get("address")
+                )
+
+                if (
+                    value_sats == swap.btc_sats
+                    and actual_address == address
+                ):
+                    contract_vout = output["n"]
+                    break
+
+            if contract_vout is None:
+                raise RuntimeError(
+                    "Could not locate Bitcoin HTLC output"
+                )
+        else:
+            pending = recover_btc_funding(
+                swap,
+                address,
             )
 
-            if (
-                value_sats == swap.btc_sats
-                and actual_address == address
-            ):
-                contract_vout = output["n"]
-                break
+            if pending is None:
+                raise RuntimeError(
+                    "BTC funding was broadcast but could "
+                    "not be recovered from the wallet"
+                )
 
-        if contract_vout is None:
-            raise RuntimeError(
-                "Could not locate Bitcoin HTLC output"
-            )
+            recovered_txid, contract_vout, blockhash = pending
+
+            if recovered_txid != txid:
+                raise RuntimeError(
+                    "Recovered BTC funding txid does not "
+                    "match the transaction just broadcast"
+                )
 
     swap.btc_funding_txid = txid
     swap.btc_funding_vout = contract_vout
     swap.btc_funding_blockhash = blockhash
+
+    if not blockhash:
+        save_swap(
+            swap,
+            role="bob",
+        )
+
+        print()
+        print("BTC FUNDING BROADCAST")
+        print("=====================")
+        print("txid:  ", txid)
+        print("vout:  ", contract_vout)
+        print("block:   pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "Awaiting normal Bitcoin confirmation; "
+            "funding intent remains active."
+        )
+        return
 
     swap.transition(
         State.BTC_FUNDED

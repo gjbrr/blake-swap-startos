@@ -345,7 +345,7 @@ def parse_swap_id(output: str) -> str:
     return m.group(1).lower()
 
 
-def make_fresh_swap(*, blake=10.0, sats=25_000) -> str:
+def make_fresh_swap(*, blake=0.1, sats=25_000) -> str:
     btc_height = int(btc_cli("getblockcount"))
     blake_height = int(blake_cli("getblockcount"))
 
@@ -1366,7 +1366,7 @@ def test_mallory() -> None:
     ok("illegal OFFERED -> BTC_FUNDED transition rejected")
 
     # Secret injection + fake BLAKE funding
-    swap_id = make_fresh_swap()
+    swap_id = make_fresh_swap(blake=0.1)
     handshake(swap_id)
     swap_cmd("fund-blake", swap_id, role="alice")
     swap_cmd("publish-blake-funded", swap_id, role="alice")
@@ -1473,7 +1473,7 @@ def test_mallory() -> None:
     }
 
     # Dedicated swap at Alice BLAKE_FUNDED.
-    signer_blake_id = make_fresh_swap()
+    signer_blake_id = make_fresh_swap(blake=0.1)
     handshake(signer_blake_id)
     swap_cmd("fund-blake", signer_blake_id, role="alice")
 
@@ -1495,7 +1495,7 @@ def test_mallory() -> None:
     ok("wrong-role BLAKE-funded signer rejected")
 
     # Dedicated swap at Bob BTC_FUNDED.
-    signer_btc_id = make_fresh_swap()
+    signer_btc_id = make_fresh_swap(blake=0.1)
     handshake(signer_btc_id)
     fund_blake_and_sync(signer_btc_id)
     swap_cmd("fund-btc", signer_btc_id, role="bob")
@@ -1540,7 +1540,7 @@ def test_mallory() -> None:
     ok("wrong-role BTC-claimed signer rejected")
 
     # Known suspected gap: BTC refund publisher
-    refund_id = make_fresh_swap()
+    refund_id = make_fresh_swap(blake=0.1)
     handshake(refund_id)
     fund_blake_and_sync(refund_id)
     fund_btc_and_sync(refund_id)
@@ -1915,6 +1915,188 @@ def test_recovery() -> None:
     # ------------------------------------------------------------
     # 5. Ordinary restart/reload proof.
     #
+    # ------------------------------------------------------------
+    # Production-style BTC funding must broadcast once,
+    # remain pending without synthetic mining, then converge
+    # after an externally mined confirmation.
+    # ------------------------------------------------------------
+    pending_btc = make_fresh_swap(blake=0.1)
+    handshake(pending_btc)
+    fund_blake_and_sync(pending_btc)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    before_sends = {
+        entry.get("txid")
+        for entry in btc_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=BOB_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    swap_cmd(
+        "fund-btc",
+        pending_btc,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        pending_btc,
+        "bob",
+    )
+
+    first_txid = pending.get(
+        "btc_funding_txid"
+    )
+    first_vout = pending.get(
+        "btc_funding_vout"
+    )
+
+    require(
+        pending.get("state") == "BLAKE_FUNDED",
+        "unconfirmed production BTC funding advanced state",
+    )
+    require(
+        first_txid,
+        "pending BTC funding did not persist txid",
+    )
+    require(
+        first_vout is not None,
+        "pending BTC funding did not persist vout",
+    )
+    require(
+        pending.get("btc_funding_blockhash") is None,
+        "pending BTC funding unexpectedly has blockhash",
+    )
+
+    intent = (
+        BOB_BASE
+        / "funding-intents"
+        / f"{pending_btc}.btc.json"
+    )
+    require(
+        intent.exists(),
+        "pending BTC funding cleared its intent too early",
+    )
+
+    after_first_sends = {
+        entry.get("txid")
+        for entry in btc_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=BOB_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    require(
+        first_txid in (after_first_sends - before_sends),
+        "first production BTC funding transaction "
+        "was not visible in wallet history",
+    )
+
+    # Retry before confirmation. It must recover the same
+    # pending wallet payment and must not create another send.
+    swap_cmd(
+        "fund-btc",
+        pending_btc,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    pending_again = load_state(
+        pending_btc,
+        "bob",
+    )
+
+    after_second_sends = {
+        entry.get("txid")
+        for entry in btc_cli(
+            "listtransactions",
+            "*",
+            1000,
+            0,
+            True,
+            wallet=BOB_WALLET,
+        )
+        if entry.get("category") == "send"
+        and entry.get("txid")
+    }
+
+    require(
+        pending_again.get("state") == "BLAKE_FUNDED",
+        "second pending BTC funding invocation advanced state",
+    )
+    require(
+        pending_again.get("btc_funding_txid") == first_txid,
+        "pending BTC funding txid changed on retry",
+    )
+    require(
+        pending_again.get("btc_funding_vout") == first_vout,
+        "pending BTC funding vout changed on retry",
+    )
+    require(
+        after_second_sends == after_first_sends,
+        "pending BTC funding retry created another wallet send",
+    )
+    require(
+        intent.exists(),
+        "pending BTC funding retry cleared intent too early",
+    )
+
+    # Confirmation is produced externally, not by swap_v2.py.
+    mine_btc(1)
+
+    swap_cmd(
+        "fund-btc",
+        pending_btc,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        pending_btc,
+        "bob",
+    )
+
+    require(
+        confirmed.get("state") == "BTC_FUNDED",
+        "confirmed BTC funding did not advance state",
+    )
+    require(
+        confirmed.get("btc_funding_txid") == first_txid,
+        "confirmed BTC funding txid changed",
+    )
+    require(
+        confirmed.get("btc_funding_vout") == first_vout,
+        "confirmed BTC funding vout changed",
+    )
+    require(
+        confirmed.get("btc_funding_blockhash"),
+        "confirmed BTC funding did not record blockhash",
+    )
+    require(
+        not intent.exists(),
+        "confirmed BTC funding did not clear intent",
+    )
+
+    ok(
+        "production BTC funding waits for real confirmation"
+    )
+
     # Every command here is already a new Python process. This
     # explicitly records that fact as a regression result.
     # ------------------------------------------------------------
