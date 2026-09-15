@@ -6,6 +6,7 @@ import {
   getWalletSigningCapability,
   WalletSigningCapability,
 } from '../lib/walletSigningCapability'
+import { isWalletEconomicallyReady } from '../lib/walletEconomicReadiness'
 
 const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
 const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
@@ -288,6 +289,23 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           value: displayCapability(
             observation.signing.signingBackendAvailable,
           ),
+          masked: false,
+          copyable: false,
+          qr: false,
+        },
+        {
+          type: 'single' as const,
+          name: `${label} — ${i18n('Economic Wallet Readiness')}`,
+          description: null,
+          value: isWalletEconomicallyReady({
+            configured: observation.configured,
+            exists: observation.exists,
+            loaded: observation.loaded,
+            signingBackendAvailable:
+              observation.signing.signingBackendAvailable,
+          })
+            ? i18n('Ready')
+            : i18n('Not Ready'),
           masked: false,
           copyable: false,
           qr: false,

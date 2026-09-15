@@ -85,6 +85,7 @@ const dict = {
   'External Signer': 74,
   'Signing Backend Available': 75,
   'Unknown': 76,
+  'Economic Wallet Readiness': 77,
 } as const
 
 /**
