@@ -1,7 +1,23 @@
 import { sdk } from './sdk'
+import { walletMapping } from './file-models/walletMapping'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info('Starting BLAKE Swap alpha service')
+
+  const savedWalletMapping =
+    await walletMapping.read().const(effects)
+
+  const blakeWallet =
+    savedWalletMapping?.blakeWallet.trim() ?? ''
+
+  const btcWallet =
+    savedWalletMapping?.btcWallet.trim() ?? ''
+
+  if (!blakeWallet || !btcWallet) {
+    throw new Error(
+      'Both BLAKE and BTC wallets must be explicitly configured before the BLAKE Swap runtime can start',
+    )
+  }
 
   const blakeRpcAddr = await sdk.host
     .getBridgeAddress(effects, {
@@ -81,6 +97,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
           '/mnt/bitcoind/.cookie',
         BLAKE_SWAP_BTC_PROVIDER_CONFIG:
           '/data/config/btc-provider.json',
+
+        // Never permit the packaged engine to fall back to its legacy
+        // participant-role wallet defaults in production.
+        BLAKE_SWAP_BLAKE_WALLET: blakeWallet,
+        BLAKE_SWAP_BTC_WALLET: btcWallet,
       },
     },
 
