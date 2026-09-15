@@ -5339,6 +5339,37 @@ def command_claim_blake(args):
         "sendrawtransaction",
         claim_hex,
     )
+
+    if not AUTO_MINE:
+        # The BLAKE spend is not authoritative protocol state until
+        # it confirms on the active chain. Persist the txid for
+        # restart/recovery, but remain BTC_CLAIMED while pending.
+        swap.blake_claim_txid = txid
+        swap.blake_claim_blockhash = None
+
+        save_swap(
+            swap,
+            role="bob",
+        )
+
+        _test_crash_after_broadcast("blake-claim-after-broadcast")
+
+        protocol_failpoint(
+            "after_blake_claim_broadcast"
+        )
+
+        print()
+        print("BLAKE CLAIM BROADCAST")
+        print("=====================")
+        print("txid:  ", txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "BLAKE claim is awaiting active-chain confirmation."
+        )
+        return
+
     _test_crash_after_broadcast("blake-claim-after-broadcast")
 
     protocol_failpoint(

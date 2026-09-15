@@ -849,6 +849,158 @@ def test_happy() -> None:
 
 
 
+def test_pending_blake_claim() -> None:
+    banner("PENDING BLAKE CLAIM CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    # Complete the Bitcoin claim normally so Bob can independently
+    # learn S from a confirmed Bitcoin transaction.
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+    )
+    swap_cmd(
+        "publish-btc-claimed",
+        swap_id,
+        role="alice",
+    )
+    swap_cmd(
+        "receive-btc-claimed",
+        swap_id,
+        role="bob",
+    )
+    swap_cmd(
+        "extract-secret",
+        swap_id,
+        role="bob",
+    )
+
+    assert_state(
+        swap_id,
+        "bob",
+        "BTC_CLAIMED",
+    )
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First broadcast must persist identity without advancing state.
+    swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    first_txid = pending.get(
+        "blake_claim_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_CLAIMED",
+        "unconfirmed BLAKE claim advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BLAKE claim did not persist txid",
+    )
+    require(
+        pending.get("blake_claim_blockhash") is None,
+        "pending BLAKE claim unexpectedly has blockhash",
+    )
+
+    # Retry while the first claim remains in the mempool. It must
+    # fail closed rather than construct/broadcast another spend.
+    proc = swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+        expect_ok=False,
+    )
+
+    require(
+        proc.returncode != 0,
+        "pending BLAKE claim retry unexpectedly succeeded",
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        (
+            "unconfirmed spender" in output
+            or "Refusing to rebroadcast" in output
+            or "outpoint is unavailable" in output
+            or "BLAKE HTLC is already spent or unavailable" in output
+        ),
+        "pending BLAKE claim retry failed for an unexpected reason:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_CLAIMED",
+        "pending BLAKE claim retry changed protocol state",
+    )
+    require(
+        still_pending.get("blake_claim_txid") == first_txid,
+        "pending BLAKE claim retry changed txid",
+    )
+    require(
+        still_pending.get("blake_claim_blockhash") is None,
+        "pending BLAKE claim retry unexpectedly recorded blockhash",
+    )
+
+    # External confirmation simulates normal production mining.
+    mine_blake(1)
+
+    swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        confirmed.get("state") == "BLAKE_CLAIMED",
+        "confirmed BLAKE claim did not advance state",
+    )
+    require(
+        confirmed.get("blake_claim_txid") == first_txid,
+        "confirmed BLAKE claim txid changed",
+    )
+    require(
+        confirmed.get("blake_claim_blockhash"),
+        "confirmed BLAKE claim did not record blockhash",
+    )
+
+    ok(
+        "production BLAKE claim waits for active-chain confirmation"
+    )
+
+
 def test_pending_btc_claim() -> None:
     banner("PENDING BTC CLAIM CONFIRMATION")
 
@@ -2844,7 +2996,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "suite",
-        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "all"],
+        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "pending-blake-claim", "all"],
         nargs="?",
         default="all",
     )
@@ -2870,6 +3022,17 @@ def main() -> int:
                 test_happy()
             except Exception as e:
                 fail("HAPPY PATH", str(e))
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("pending-blake-claim", "all"):
+            try:
+                test_pending_blake_claim()
+            except Exception as e:
+                fail(
+                    "PENDING BLAKE CLAIM CONFIRMATION",
+                    str(e),
+                )
                 if args.suite != "all":
                     raise
 
