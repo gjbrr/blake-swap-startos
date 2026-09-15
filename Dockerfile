@@ -13,8 +13,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY upstream-project/src/*.py ./src/
 COPY upstream-project/scripts/blake ./scripts/blake
 COPY upstream-project/scripts/blake-swap ./scripts/blake-swap
+COPY adapters ./adapters
 
-RUN chmod +x ./scripts/blake ./scripts/blake-swap \
+RUN chmod +x \
+        ./scripts/blake \
+        ./scripts/blake-swap \
+        ./adapters/blake-rpc-cli \
+        ./adapters/btc-rpc-cli \
     && mkdir -p /data
 
 

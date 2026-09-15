@@ -1,0 +1,3 @@
+#!/bin/sh
+export BLAKE_SWAP_RPC_ADAPTER_KIND=btc
+exec python3 /opt/blake-swap/adapters/rpc_cli.py "$@"
