@@ -65,6 +65,15 @@ const dict = {
   'Economic Readiness': 54,
   'Ready': 55,
   'Not Ready': 56,
+  'BLAKE Wallet': 57,
+  'Wallet name on the configured BLAKE/Knots node. This selects an existing wallet; it does not create or load one.': 58,
+  'Bitcoin Wallet': 59,
+  'Wallet name on the configured ordinary Bitcoin Core node. This selects an existing wallet; it does not create or load one.': 60,
+  'Configure Chain Wallets': 61,
+  'Select the existing BLAKE and Bitcoin wallets that BLAKE Swap will use.': 62,
+  'This action only records wallet names. It does not create, load, unlock, sign with, or spend from either wallet.': 63,
+  'Chain Wallets': 64,
+  'Wallet mapping saved successfully.': 65,
 } as const
 
 /**
