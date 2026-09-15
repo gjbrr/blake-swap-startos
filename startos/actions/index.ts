@@ -13,6 +13,7 @@ import { fundBlake } from './fundBlake'
 import { viewMarket } from './viewMarket'
 import { createOffer } from './createOffer'
 import { cancelOffer } from './cancelOffer'
+import { takeOffer } from './takeOffer'
 
 export const actions = sdk.Actions.of()
   .addAction(verifyEngine)
@@ -26,5 +27,6 @@ export const actions = sdk.Actions.of()
   .addAction(viewMarket)
   .addAction(createOffer)
   .addAction(cancelOffer)
+  .addAction(takeOffer)
   .addAction(fundBlake)
   .addAction(checkBtcRpc)

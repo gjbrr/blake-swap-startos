@@ -149,6 +149,17 @@ const dict = {
   'Your signed market offer cancellation was published successfully.': 138,
   'Cancellation ID': 139,
   'Full Offer IDs': 140,
+  'Full 64-character Nostr event ID of the open market offer you want to take.': 141,
+  'Take Offer': 142,
+  'Publish a signed request to take an open BLAKE/BTC market offer.': 143,
+  'This publishes a public signed take request. It does not fund an HTLC or move BLAKE or Bitcoin.': 144,
+  'Offer take failed.': 145,
+  'Take command completed without confirming a signed take.': 146,
+  'Market Offer Taken': 147,
+  'Existing Market Take Reused': 148,
+  'Your signed take request was published successfully.': 149,
+  'Your existing signed take request was reused without creating a duplicate.': 150,
+  'Take ID': 151,
 } as const
 
 /**
