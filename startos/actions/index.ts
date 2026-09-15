@@ -8,6 +8,7 @@ import { checkBtcRpc } from './checkBtcRpc'
 import { configureBtcProvider } from './configureBtcProvider'
 import { configureWallets } from './configureWallets'
 import { checkWalletReadiness } from './checkWalletReadiness'
+import { checkEconomicReadiness } from './checkEconomicReadiness'
 
 export const actions = sdk.Actions.of()
   .addAction(verifyEngine)
@@ -17,4 +18,5 @@ export const actions = sdk.Actions.of()
   .addAction(configureBtcProvider)
   .addAction(configureWallets)
   .addAction(checkWalletReadiness)
+  .addAction(checkEconomicReadiness)
   .addAction(checkBtcRpc)

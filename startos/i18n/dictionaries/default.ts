@@ -86,6 +86,16 @@ const dict = {
   'Signing Backend Available': 75,
   'Unknown': 76,
   'Economic Wallet Readiness': 77,
+  'Check Economic Readiness': 78,
+  'Check read-only chain and wallet readiness for both sides before economic use.': 79,
+  'Economic Preflight': 80,
+  'Economic readiness check completed successfully.': 81,
+  'BLAKE Chain Readiness': 82,
+  'BLAKE Wallet Readiness': 83,
+  'BLAKE Economic Context': 84,
+  'BTC Chain Readiness': 85,
+  'BTC Wallet Readiness': 86,
+  'BTC Economic Context': 87,
 } as const
 
 /**
