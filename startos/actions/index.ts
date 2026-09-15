@@ -12,6 +12,7 @@ import { checkEconomicReadiness } from './checkEconomicReadiness'
 import { fundBlake } from './fundBlake'
 import { viewMarket } from './viewMarket'
 import { createOffer } from './createOffer'
+import { cancelOffer } from './cancelOffer'
 
 export const actions = sdk.Actions.of()
   .addAction(verifyEngine)
@@ -24,5 +25,6 @@ export const actions = sdk.Actions.of()
   .addAction(checkEconomicReadiness)
   .addAction(viewMarket)
   .addAction(createOffer)
+  .addAction(cancelOffer)
   .addAction(fundBlake)
   .addAction(checkBtcRpc)

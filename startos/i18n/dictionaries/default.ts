@@ -138,6 +138,17 @@ const dict = {
   'Giving': 127,
   'Wanting': 128,
   'Lifetime': 129,
+  'Full 64-character Nostr event ID of one of your market offers.': 130,
+  'Cancel Offer': 131,
+  'Publish a signed cancellation for one of your public market offers.': 132,
+  'This publishes a public signed cancellation event. It does not move BLAKE or Bitcoin.': 133,
+  'Offer ID must be exactly 64 hexadecimal characters.': 134,
+  'Offer cancellation failed.': 135,
+  'Offer command completed without confirming cancellation.': 136,
+  'Market Offer Cancelled': 137,
+  'Your signed market offer cancellation was published successfully.': 138,
+  'Cancellation ID': 139,
+  'Full Offer IDs': 140,
 } as const
 
 /**

@@ -160,6 +160,17 @@ export const viewMarket = sdk.Action.withoutInput(
             .map(formatOpenOffer)
             .join('\n')
 
+    const fullOfferIds =
+      openOffers.length === 0
+        ? i18n('No open offers.')
+        : openOffers
+            .map(offer =>
+              typeof offer.event_id === 'string'
+                ? offer.event_id
+                : '<invalid-id>',
+            )
+            .join('\n')
+
     return {
       version: '1',
       title: i18n('BLAKE/BTC Market'),
@@ -174,6 +185,15 @@ export const viewMarket = sdk.Action.withoutInput(
             name: i18n('Open Offers'),
             description: null,
             value: display,
+            masked: false,
+            copyable: true,
+            qr: false,
+          },
+          {
+            type: 'single',
+            name: i18n('Full Offer IDs'),
+            description: null,
+            value: fullOfferIds,
             masked: false,
             copyable: true,
             qr: false,
