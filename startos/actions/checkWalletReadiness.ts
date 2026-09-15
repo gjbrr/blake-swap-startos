@@ -6,19 +6,15 @@ import {
   getWalletSigningCapability,
   WalletSigningCapability,
 } from '../lib/walletSigningCapability'
-import { isWalletEconomicallyReady } from '../lib/walletEconomicReadiness'
+import {
+  emptyWalletReadinessObservation,
+  isObservationEconomicallyReady,
+  WalletReadinessObservation,
+} from '../lib/walletReadinessObservation'
 
 const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
 const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
 const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
-
-type WalletObservation = {
-  wallet: string
-  configured: boolean
-  exists: boolean
-  loaded: boolean
-  signing: WalletSigningCapability
-}
 
 export const checkWalletReadiness = sdk.Action.withoutInput(
   'check-wallet-readiness',
@@ -114,19 +110,9 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           cli: string,
           wallet: string,
           env: string[],
-        ): Promise<WalletObservation> {
+        ): Promise<WalletReadinessObservation> {
           if (!wallet) {
-            return {
-              wallet: '',
-              configured: false,
-              exists: false,
-              loaded: false,
-              signing: {
-                privateKeysEnabled: null,
-                externalSigner: null,
-                signingBackendAvailable: null,
-              },
-            }
+            return emptyWalletReadinessObservation()
           }
 
           const walletDir = await runJson([
@@ -221,7 +207,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
 
     function fields(
       label: string,
-      observation: WalletObservation,
+      observation: WalletReadinessObservation,
     ) {
       return [
         {
@@ -297,13 +283,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           type: 'single' as const,
           name: `${label} — ${i18n('Economic Wallet Readiness')}`,
           description: null,
-          value: isWalletEconomicallyReady({
-            configured: observation.configured,
-            exists: observation.exists,
-            loaded: observation.loaded,
-            signingBackendAvailable:
-              observation.signing.signingBackendAvailable,
-          })
+          value: isObservationEconomicallyReady(observation)
             ? i18n('Ready')
             : i18n('Not Ready'),
           masked: false,
