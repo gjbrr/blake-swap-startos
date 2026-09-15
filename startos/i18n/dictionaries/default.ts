@@ -106,6 +106,16 @@ const dict = {
   'BLAKE funding command completed. Inspect swap state for broadcast and confirmation progress.': 95,
   'BLAKE Funding': 96,
   'Explicit BLAKE funding operation completed.': 97,
+  'View Market': 98,
+  'Read canonical BLAKE/BTC market state from Nostr.': 99,
+  'Market read failed.': 100,
+  'BLAKE/BTC Market': 101,
+  'Market state loaded successfully.': 102,
+  'Offer Count': 103,
+  'Canonical Market State': 104,
+  'Open Offers': 105,
+  'Canonical Record Count': 106,
+  'No open offers.': 107,
 } as const
 
 /**
