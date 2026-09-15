@@ -96,6 +96,16 @@ const dict = {
   'BTC Chain Readiness': 85,
   'BTC Wallet Readiness': 86,
   'BTC Economic Context': 87,
+  'Fund BLAKE': 88,
+  'Explicitly fund the only unambiguous funding-ready BLAKE swap.': 89,
+  'This action can move BLAKE funds. It will refuse unless both chain and wallet economic contexts are ready.': 90,
+  'Both BLAKE and BTC wallets must be explicitly configured.': 91,
+  'BLAKE funding command failed.': 92,
+  'No unambiguous funding-ready BLAKE swap is available.': 93,
+  'Multiple BLAKE swaps are funding-ready; refusing to choose which trade receives funds.': 94,
+  'BLAKE funding command completed. Inspect swap state for broadcast and confirmation progress.': 95,
+  'BLAKE Funding': 96,
+  'Explicit BLAKE funding operation completed.': 97,
 } as const
 
 /**
