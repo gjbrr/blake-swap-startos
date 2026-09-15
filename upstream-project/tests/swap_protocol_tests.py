@@ -1657,6 +1657,189 @@ def test_pending_btc_refund() -> None:
     )
 
 
+def test_pending_blake_refund() -> None:
+    banner("PENDING BLAKE REFUND CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    # First complete Bob's Bitcoin refund normally.
+    bob = load_state(
+        swap_id,
+        "bob",
+    )
+
+    current_btc = int(
+        btc_cli("getblockcount")
+    )
+
+    to_btc_timeout = (
+        int(bob["btc_timeout"])
+        - current_btc
+    )
+
+    if to_btc_timeout > 0:
+        mine_btc(to_btc_timeout)
+
+    swap_cmd(
+        "refund-btc",
+        swap_id,
+        role="bob",
+    )
+
+    swap_cmd(
+        "publish-btc-refunded",
+        swap_id,
+        role="bob",
+    )
+
+    swap_cmd(
+        "receive-btc-refunded",
+        swap_id,
+        role="alice",
+    )
+
+    assert_state(
+        swap_id,
+        "alice",
+        "BTC_REFUNDED",
+    )
+
+    alice = load_state(
+        swap_id,
+        "alice",
+    )
+
+    current_blake = int(
+        blake_cli("getblockcount")
+    )
+
+    to_blake_timeout = (
+        int(alice["blake_timeout"])
+        - current_blake
+    )
+
+    if to_blake_timeout > 0:
+        mine_blake(to_blake_timeout)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First mature refund broadcast must persist its txid without
+    # advancing authoritative protocol state.
+    swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    first_txid = pending.get(
+        "blake_refund_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_REFUNDED",
+        "unconfirmed BLAKE refund advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BLAKE refund did not persist txid",
+    )
+    require(
+        pending.get("blake_refund_blockhash") is None,
+        "pending BLAKE refund unexpectedly has blockhash",
+    )
+
+    # Retry while the refund is still in the mempool. The consumed
+    # HTLC must cause a fail-closed result rather than another spend.
+    proc = swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+        expect_ok=False,
+    )
+
+    require(
+        proc.returncode != 0,
+        "pending BLAKE refund retry unexpectedly succeeded",
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        (
+            "unconfirmed spender" in output
+            or "Refusing to rebroadcast" in output
+            or "outpoint is unavailable" in output
+            or "BLAKE HTLC is already spent or unavailable" in output
+        ),
+        "pending BLAKE refund retry failed for an unexpected reason:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_REFUNDED",
+        "pending BLAKE refund retry changed protocol state",
+    )
+    require(
+        still_pending.get("blake_refund_txid") == first_txid,
+        "pending BLAKE refund retry changed txid",
+    )
+    require(
+        still_pending.get("blake_refund_blockhash") is None,
+        "pending BLAKE refund retry unexpectedly recorded blockhash",
+    )
+
+    # Simulate production confirmation externally.
+    mine_blake(1)
+
+    swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        confirmed.get("state") == "BLAKE_REFUNDED",
+        "confirmed BLAKE refund did not advance state",
+    )
+    require(
+        confirmed.get("blake_refund_txid") == first_txid,
+        "confirmed BLAKE refund txid changed",
+    )
+    require(
+        confirmed.get("blake_refund_blockhash"),
+        "confirmed BLAKE refund did not record blockhash",
+    )
+
+    ok(
+        "production BLAKE refund waits for active-chain confirmation"
+    )
+
+
 def test_refund() -> None:
     banner("TWO-FUNDED REFUND PATH")
     swap_id = make_fresh_swap()
@@ -3138,7 +3321,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "suite",
-        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "pending-blake-claim", "pending-btc-refund", "all"],
+        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "pending-blake-claim", "pending-btc-refund", "pending-blake-refund", "all"],
         nargs="?",
         default="all",
     )
@@ -3164,6 +3347,17 @@ def main() -> int:
                 test_happy()
             except Exception as e:
                 fail("HAPPY PATH", str(e))
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("pending-blake-refund", "all"):
+            try:
+                test_pending_blake_refund()
+            except Exception as e:
+                fail(
+                    "PENDING BLAKE REFUND CONFIRMATION",
+                    str(e),
+                )
                 if args.suite != "all":
                     raise
 

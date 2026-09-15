@@ -5537,6 +5537,15 @@ def command_refund_blake(args):
     )
 
     if recovered is not None:
+        if (
+            swap.blake_refund_txid is not None
+            and swap.blake_refund_txid != recovered["txid"]
+        ):
+            raise RuntimeError(
+                "SECURITY FAILURE: confirmed BLAKE refund txid "
+                "differs from the pending refund we broadcast"
+            )
+
         swap.blake_refund_txid = recovered["txid"]
         swap.blake_refund_blockhash = recovered["blockhash"]
 
@@ -5726,6 +5735,38 @@ def command_refund_blake(args):
         "sendrawtransaction",
         refund_hex,
     )
+
+    if not AUTO_MINE:
+        # Broadcasting a mature refund does not make it authoritative
+        # protocol state. Persist the transaction identity for
+        # restart/recovery, but keep the current pre-confirmation
+        # state until the refund confirms on the active BLAKE chain.
+        swap.blake_refund_txid = txid
+        swap.blake_refund_blockhash = None
+
+        save_swap(
+            swap,
+            role="alice",
+        )
+
+        _test_crash_after_broadcast("blake-refund-after-broadcast")
+
+        protocol_failpoint(
+            "after_blake_refund_broadcast"
+        )
+
+        print()
+        print("BLAKE REFUND BROADCAST")
+        print("======================")
+        print("txid:  ", txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "BLAKE refund is awaiting active-chain confirmation."
+        )
+        return
+
     _test_crash_after_broadcast("blake-refund-after-broadcast")
 
     protocol_failpoint(
