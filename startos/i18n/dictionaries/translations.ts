@@ -75,6 +75,10 @@ export default {
     70: 'Configured',
     71: 'Exists',
     72: 'Loaded',
+    73: 'Private Keys Enabled',
+    74: 'External Signer',
+    75: 'Signing Backend Available',
+    76: 'Unknown',
   },
   de_DE: {
     0: 'Starte BLAKE Swap!',
@@ -150,6 +154,10 @@ export default {
     70: 'Configured',
     71: 'Exists',
     72: 'Loaded',
+    73: 'Private Keys Enabled',
+    74: 'External Signer',
+    75: 'Signing Backend Available',
+    76: 'Unknown',
   },
   pl_PL: {
     0: 'Uruchamianie BLAKE Swap!',
@@ -225,6 +233,10 @@ export default {
     70: 'Configured',
     71: 'Exists',
     72: 'Loaded',
+    73: 'Private Keys Enabled',
+    74: 'External Signer',
+    75: 'Signing Backend Available',
+    76: 'Unknown',
   },
   fr_FR: {
     0: 'Démarrage de BLAKE Swap !',
@@ -300,5 +312,9 @@ export default {
     70: 'Configured',
     71: 'Exists',
     72: 'Loaded',
+    73: 'Private Keys Enabled',
+    74: 'External Signer',
+    75: 'Signing Backend Available',
+    76: 'Unknown',
   },
 } satisfies Record<string, LangDict>

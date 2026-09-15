@@ -2,6 +2,10 @@ import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import { walletMapping } from '../file-models/walletMapping'
 import { btcProvider } from '../file-models/btcProvider'
+import {
+  getWalletSigningCapability,
+  WalletSigningCapability,
+} from '../lib/walletSigningCapability'
 
 const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
 const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
@@ -12,6 +16,7 @@ type WalletObservation = {
   configured: boolean
   exists: boolean
   loaded: boolean
+  signing: WalletSigningCapability
 }
 
 export const checkWalletReadiness = sdk.Action.withoutInput(
@@ -115,6 +120,11 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
               configured: false,
               exists: false,
               loaded: false,
+              signing: {
+                privateKeysEnabled: null,
+                externalSigner: null,
+                signingBackendAvailable: null,
+              },
             }
           }
 
@@ -144,15 +154,23 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
             Array.isArray(loadedWallets) &&
             loadedWallets.includes(wallet)
 
+          let signing: WalletSigningCapability = {
+            privateKeysEnabled: null,
+            externalSigner: null,
+            signingBackendAvailable: null,
+          }
+
           if (loaded) {
-            // Prove the wallet-scoped endpoint itself is usable.
-            await runJson([
+            // Read wallet capability flags only. Do not sign or mutate.
+            const walletInfo = await runJson([
               'env',
               ...env,
               cli,
               `-rpcwallet=${wallet}`,
               'getwalletinfo',
-            ])
+            ]) as Record<string, unknown>
+
+            signing = getWalletSigningCapability(walletInfo)
           }
 
           return {
@@ -160,6 +178,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
             configured: true,
             exists,
             loaded,
+            signing,
           }
         }
 
@@ -188,6 +207,16 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
         }
       },
     )
+
+    function displayCapability(
+      value: boolean | null,
+    ): string {
+      if (value === null) {
+        return i18n('Unknown')
+      }
+
+      return String(value)
+    }
 
     function fields(
       label: string,
@@ -226,6 +255,39 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           name: `${label} — ${i18n('Loaded')}`,
           description: null,
           value: String(observation.loaded),
+          masked: false,
+          copyable: false,
+          qr: false,
+        },
+        {
+          type: 'single' as const,
+          name: `${label} — ${i18n('Private Keys Enabled')}`,
+          description: null,
+          value: displayCapability(
+            observation.signing.privateKeysEnabled,
+          ),
+          masked: false,
+          copyable: false,
+          qr: false,
+        },
+        {
+          type: 'single' as const,
+          name: `${label} — ${i18n('External Signer')}`,
+          description: null,
+          value: displayCapability(
+            observation.signing.externalSigner,
+          ),
+          masked: false,
+          copyable: false,
+          qr: false,
+        },
+        {
+          type: 'single' as const,
+          name: `${label} — ${i18n('Signing Backend Available')}`,
+          description: null,
+          value: displayCapability(
+            observation.signing.signingBackendAvailable,
+          ),
           masked: false,
           copyable: false,
           qr: false,

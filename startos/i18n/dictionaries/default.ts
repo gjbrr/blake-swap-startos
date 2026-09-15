@@ -81,6 +81,10 @@ const dict = {
   'Configured': 70,
   'Exists': 71,
   'Loaded': 72,
+  'Private Keys Enabled': 73,
+  'External Signer': 74,
+  'Signing Backend Available': 75,
+  'Unknown': 76,
 } as const
 
 /**
