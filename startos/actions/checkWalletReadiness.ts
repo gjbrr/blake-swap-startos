@@ -3,14 +3,10 @@ import { i18n } from '../i18n'
 import { walletMapping } from '../file-models/walletMapping'
 import { btcProvider } from '../file-models/btcProvider'
 import {
-  getWalletSigningCapability,
-  WalletSigningCapability,
-} from '../lib/walletSigningCapability'
-import {
-  emptyWalletReadinessObservation,
   isObservationEconomicallyReady,
   WalletReadinessObservation,
 } from '../lib/walletReadinessObservation'
+import { observeWalletReadiness } from '../lib/observeWalletReadiness'
 
 const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
 const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
@@ -106,86 +102,29 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           ) as unknown
         }
 
-        async function inspectWallet(
-          cli: string,
-          wallet: string,
-          env: string[],
-        ): Promise<WalletReadinessObservation> {
-          if (!wallet) {
-            return emptyWalletReadinessObservation()
-          }
-
-          const walletDir = await runJson([
-            'env',
-            ...env,
-            cli,
-            'listwalletdir',
-          ]) as {
-            wallets?: Array<{ name?: string }>
-          }
-
-          const loadedWallets = await runJson([
-            'env',
-            ...env,
-            cli,
-            'listwallets',
-          ]) as unknown[]
-
-          const exists =
-            Array.isArray(walletDir.wallets) &&
-            walletDir.wallets.some(
-              item => item?.name === wallet,
-            )
-
-          const loaded =
-            Array.isArray(loadedWallets) &&
-            loadedWallets.includes(wallet)
-
-          let signing: WalletSigningCapability = {
-            privateKeysEnabled: null,
-            externalSigner: null,
-            signingBackendAvailable: null,
-          }
-
-          if (loaded) {
-            // Read wallet capability flags only. Do not sign or mutate.
-            const walletInfo = await runJson([
-              'env',
-              ...env,
-              cli,
-              `-rpcwallet=${wallet}`,
-              'getwalletinfo',
-            ]) as Record<string, unknown>
-
-            signing = getWalletSigningCapability(walletInfo)
-          }
-
-          return {
-            wallet,
-            configured: true,
-            exists,
-            loaded,
-            signing,
-          }
-        }
-
-        const blake = await inspectWallet(
-          '/opt/blake-swap/adapters/blake-rpc-cli',
-          blakeWallet,
-          blakeRpcAddr
-            ? [
-                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-              ]
-            : [],
+        const blake = await observeWalletReadiness(
+          runJson,
+          {
+            cli: '/opt/blake-swap/adapters/blake-rpc-cli',
+            wallet: blakeWallet,
+            env: blakeRpcAddr
+              ? [
+                  `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
+                  'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+                ]
+              : [],
+          },
         )
 
-        const btc = await inspectWallet(
-          '/opt/blake-swap/adapters/btc-rpc-cli',
-          btcWallet,
-          [
-            'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-          ],
+        const btc = await observeWalletReadiness(
+          runJson,
+          {
+            cli: '/opt/blake-swap/adapters/btc-rpc-cli',
+            wallet: btcWallet,
+            env: [
+              'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+            ],
+          },
         )
 
         return {
