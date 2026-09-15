@@ -6218,6 +6218,39 @@ def command_claim_btc(args):
         "sendrawtransaction",
         claim_hex,
     )
+
+    if not AUTO_MINE:
+        # A mempool claim reveals S publicly, but it is NOT yet
+        # authoritative protocol state. Persist only the broadcast
+        # txid so restart/recovery can identify what Alice sent.
+        swap.btc_claim_txid = txid
+        swap.btc_claim_blockhash = None
+
+        save_swap(
+            swap,
+            role="alice",
+        )
+
+        _test_crash_after_broadcast("btc-claim-after-broadcast")
+
+        protocol_failpoint(
+            "after_btc_claim_broadcast"
+        )
+
+        print()
+        print("BTC CLAIM BROADCAST")
+        print("===================")
+        print("txid:  ", txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "Secret S is now visible in the Bitcoin mempool, "
+            "but protocol state will not advance until the claim "
+            "is confirmed on the active chain."
+        )
+        return
+
     _test_crash_after_broadcast("btc-claim-after-broadcast")
 
     protocol_failpoint(

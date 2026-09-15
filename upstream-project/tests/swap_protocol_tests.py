@@ -849,6 +849,145 @@ def test_happy() -> None:
 
 
 
+def test_pending_btc_claim() -> None:
+    banner("PENDING BTC CLAIM CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First claim broadcast: S enters the mempool, but durable
+    # protocol state must remain BTC_FUNDED until confirmation.
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    first_txid = pending.get(
+        "btc_claim_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_FUNDED",
+        "unconfirmed BTC claim advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BTC claim did not persist txid",
+    )
+    require(
+        pending.get("btc_claim_blockhash") is None,
+        "pending BTC claim unexpectedly has blockhash",
+    )
+
+    # Bob must not be able to consume Alice's pending claim as
+    # authoritative settlement data.
+    before_bob = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        before_bob.get("state") == "BTC_FUNDED",
+        "Bob was not BTC_FUNDED before pending-claim check",
+    )
+    require(
+        before_bob.get("btc_claim_txid") is None,
+        "Bob unexpectedly recorded Alice's pending BTC claim",
+    )
+
+    # Retry before confirmation. The existing mempool-spend guard
+    # must fail closed rather than broadcast another irreversible spend.
+    proc = swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+        expect_ok=False,
+    )
+
+    require(
+        proc.returncode != 0,
+        "pending BTC claim retry unexpectedly succeeded",
+    )
+
+    output = proc.stdout + proc.stderr
+    require(
+        (
+            "unconfirmed spender" in output
+            or "Refusing to rebroadcast" in output
+            or "outpoint is unavailable" in output
+            or "Bitcoin HTLC is already spent or unavailable" in output
+        ),
+        "pending BTC claim retry failed for an unexpected reason:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_FUNDED",
+        "pending BTC claim retry changed protocol state",
+    )
+    require(
+        still_pending.get("btc_claim_txid") == first_txid,
+        "pending BTC claim retry changed txid",
+    )
+    require(
+        still_pending.get("btc_claim_blockhash") is None,
+        "pending BTC claim retry unexpectedly recorded blockhash",
+    )
+
+    # Confirmation comes from the external test harness, not swap_v2.py.
+    mine_btc(1)
+
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        confirmed.get("state") == "BTC_CLAIMED",
+        "confirmed BTC claim did not advance state",
+    )
+    require(
+        confirmed.get("btc_claim_txid") == first_txid,
+        "confirmed BTC claim txid changed",
+    )
+    require(
+        confirmed.get("btc_claim_blockhash"),
+        "confirmed BTC claim did not record blockhash",
+    )
+
+    ok(
+        "production BTC claim waits for active-chain confirmation"
+    )
+
+
 def test_reorg_btc_claim() -> None:
     banner("REORG SAFETY: BTC CLAIM ROLLBACK")
 
@@ -2705,7 +2844,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "suite",
-        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "all"],
+        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "all"],
         nargs="?",
         default="all",
     )
@@ -2731,6 +2870,17 @@ def main() -> int:
                 test_happy()
             except Exception as e:
                 fail("HAPPY PATH", str(e))
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("pending-btc-claim", "all"):
+            try:
+                test_pending_btc_claim()
+            except Exception as e:
+                fail(
+                    "PENDING BTC CLAIM CONFIRMATION",
+                    str(e),
+                )
                 if args.suite != "all":
                     raise
 
