@@ -6340,6 +6340,15 @@ def command_refund_btc(args):
     )
 
     if recovered is not None:
+        if (
+            swap.btc_refund_txid is not None
+            and swap.btc_refund_txid != recovered["txid"]
+        ):
+            raise RuntimeError(
+                "SECURITY FAILURE: confirmed Bitcoin refund txid "
+                "differs from the pending refund we broadcast"
+            )
+
         swap.btc_refund_txid = recovered["txid"]
         swap.btc_refund_blockhash = recovered["blockhash"]
 
@@ -6511,6 +6520,37 @@ def command_refund_btc(args):
         "sendrawtransaction",
         refund_hex,
     )
+
+    if not AUTO_MINE:
+        # Broadcasting a mature refund does not make it authoritative
+        # protocol state. Persist the transaction identity for
+        # restart/recovery, but remain BTC_FUNDED until confirmation.
+        swap.btc_refund_txid = txid
+        swap.btc_refund_blockhash = None
+
+        save_swap(
+            swap,
+            role="bob",
+        )
+
+        _test_crash_after_broadcast("btc-refund-after-broadcast")
+
+        protocol_failpoint(
+            "after_btc_refund_broadcast"
+        )
+
+        print()
+        print("BTC REFUND BROADCAST")
+        print("====================")
+        print("txid:  ", txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "Bitcoin refund is awaiting active-chain confirmation."
+        )
+        return
+
     _test_crash_after_broadcast("btc-refund-after-broadcast")
 
     protocol_failpoint(
