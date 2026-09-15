@@ -54,6 +54,51 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'blake-swap-subcontainer',
   )
 
+  const identityResult = await swapSubcontainer.exec([
+    'python3',
+    '-c',
+    `
+import os
+from pathlib import Path
+from coincurve import PrivateKey
+
+path = Path("/data/participant.key")
+
+try:
+    fd = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+except FileExistsError:
+    pass
+else:
+    try:
+        key = PrivateKey().secret.hex() + "\\n"
+        os.write(fd, key.encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+os.chmod(path, 0o600)
+
+raw = path.read_text().strip()
+
+try:
+    key_bytes = bytes.fromhex(raw)
+    PrivateKey(key_bytes)
+except Exception as exc:
+    raise RuntimeError(
+        "Persistent participant identity key is invalid"
+    ) from exc
+`,
+  ])
+
+  if (identityResult.exitCode !== 0) {
+    throw new Error(
+      `Could not initialize persistent participant identity: ${identityResult.stderr}`,
+    )
+  }
   return sdk.Daemons.of(effects).addDaemon('blake-swap', {
     subcontainer: swapSubcontainer,
 
@@ -73,6 +118,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         BLAKE_SWAP_STATE_DIR: '/data/swaps',
         BLAKE_SWAP_MESSAGE_DIR: '/data/messages',
         BLAKE_SWAP_NOSTR_KEY_DIR: '/data/nostr',
+        BLAKE_SWAP_PARTICIPANT_KEY_FILE: '/data/participant.key',
 
         // Private RPC adapters used only by the packaged swap engine.
         BLAKE_SWAP_BLAKE_CLI:
