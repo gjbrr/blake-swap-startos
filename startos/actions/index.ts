@@ -14,6 +14,7 @@ import { viewMarket } from './viewMarket'
 import { createOffer } from './createOffer'
 import { cancelOffer } from './cancelOffer'
 import { takeOffer } from './takeOffer'
+import { acceptMatch } from './acceptMatch'
 
 export const actions = sdk.Actions.of()
   .addAction(verifyEngine)
@@ -28,5 +29,6 @@ export const actions = sdk.Actions.of()
   .addAction(createOffer)
   .addAction(cancelOffer)
   .addAction(takeOffer)
+  .addAction(acceptMatch)
   .addAction(fundBlake)
   .addAction(checkBtcRpc)

@@ -160,6 +160,19 @@ const dict = {
   'Your signed take request was published successfully.': 149,
   'Your existing signed take request was reused without creating a duplicate.': 150,
   'Take ID': 151,
+  'Accept Match': 152,
+  'Import a pending authenticated market match and bind it to local atomic-swap state.': 153,
+  'This requires both chains and both configured wallets to be economically ready. Accepting a match does not itself move funds.': 154,
+  'Match ID / Prefix': 155,
+  'Optional market match event ID or unique hexadecimal prefix of at least 8 characters. Leave blank only when exactly one pending match exists.': 156,
+  'Match ID prefix must contain 8 to 64 hexadecimal characters.': 157,
+  'Match acceptance failed.': 158,
+  'No Pending Match': 159,
+  'No unimported valid market match was found for this participant.': 160,
+  'Multiple Pending Matches': 161,
+  'More than one valid pending match exists. Enter a match ID prefix to choose explicitly.': 162,
+  'Market Match Accepted': 163,
+  'The authenticated market match was imported successfully. No funds moved.': 164,
 } as const
 
 /**
