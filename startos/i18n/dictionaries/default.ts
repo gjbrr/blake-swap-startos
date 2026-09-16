@@ -196,6 +196,20 @@ const dict = {
   'This public identity is persistent for this BLAKE Swap installation.': 185,
   'Nostr Public Key (hex)': 186,
   'Nostr Public Key (npub)': 187,
+  'Get BLAKE Deposit Address': 188,
+  'Generate a new receiving address from the configured BLAKE wallet.': 189,
+  'This creates a new receiving address in the configured node wallet. It does not move or spend funds.': 190,
+  'Configure a BLAKE wallet before requesting a deposit address.': 191,
+  'BLAKE deposit address could not be generated.': 192,
+  'BLAKE Deposit Address': 193,
+  'Send BLAKE only to this address.': 194,
+  'Address': 195,
+  'Get BTC Deposit Address': 196,
+  'Generate a new receiving address from the configured Bitcoin wallet.': 197,
+  'Configure a Bitcoin wallet before requesting a deposit address.': 198,
+  'Bitcoin deposit address could not be generated.': 199,
+  'Bitcoin Deposit Address': 200,
+  'Send Bitcoin only to this address.': 201,
 } as const
 
 /**
