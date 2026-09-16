@@ -210,6 +210,16 @@ const dict = {
   'Bitcoin deposit address could not be generated.': 199,
   'Bitcoin Deposit Address': 200,
   'Send Bitcoin only to this address.': 201,
+  'Nostr Relays': 202,
+  'Enter one secure Nostr relay URL per line.': 203,
+  'At least one Nostr relay is required.': 204,
+  'No more than 10 Nostr relays may be configured.': 205,
+  'Each Nostr relay must be a valid wss:// URL.': 206,
+  'Configure Nostr Relays': 207,
+  'Choose the external Nostr relays used for BLAKE Swap coordination.': 208,
+  'Relays coordinate public signed swap messages. They are not trusted with chain settlement or funds.': 209,
+  'Nostr relay configuration saved successfully.': 210,
+  'Configured Relays': 211,
 } as const
 
 /**

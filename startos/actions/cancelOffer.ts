@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
+import { getNostrRelayEnv } from '../file-models/nostrRelays'
 
 const { InputSpec, Value } = sdk
 
@@ -88,7 +89,7 @@ export const cancelOffer = sdk.Action.withInput(
             'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
             'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
             'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
-            'BLAKE_SWAP_NOSTR_RELAYS=wss://TheForest.nostr1.com,wss://nos.lol',
+            await getNostrRelayEnv(effects),
             'python3',
             '/opt/blake-swap/src/swap_v2.py',
             'cancel-market-offer',

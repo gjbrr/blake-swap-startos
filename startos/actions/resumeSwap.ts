@@ -1,5 +1,6 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
+import { getNostrRelayEnv } from '../file-models/nostrRelays'
 import { walletMapping } from '../file-models/walletMapping'
 import {
   requireBlakeEconomicContextReadiness,
@@ -245,7 +246,7 @@ export const resumeSwap = sdk.Action.withInput(
               'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
               'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
 
-              'BLAKE_SWAP_NOSTR_RELAYS=wss://TheForest.nostr1.com,wss://nos.lol',
+              await getNostrRelayEnv(effects),
 
               'BLAKE_SWAP_BLAKE_CLI=/opt/blake-swap/adapters/blake-rpc-cli',
               'BLAKE_SWAP_BTC_CLI=/opt/blake-swap/adapters/btc-rpc-cli',
