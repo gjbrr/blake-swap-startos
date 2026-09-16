@@ -10,6 +10,7 @@ import { configureWallets } from './configureWallets'
 import { checkWalletReadiness } from './checkWalletReadiness'
 import { checkEconomicReadiness } from './checkEconomicReadiness'
 import { fundBlake } from './fundBlake'
+import { resumeSwap } from './resumeSwap'
 import { viewMarket } from './viewMarket'
 import { createOffer } from './createOffer'
 import { cancelOffer } from './cancelOffer'
@@ -31,4 +32,5 @@ export const actions = sdk.Actions.of()
   .addAction(takeOffer)
   .addAction(acceptMatch)
   .addAction(fundBlake)
+  .addAction(resumeSwap)
   .addAction(checkBtcRpc)

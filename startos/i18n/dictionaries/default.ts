@@ -173,6 +173,21 @@ const dict = {
   'More than one valid pending match exists. Enter a match ID prefix to choose explicitly.': 162,
   'Market Match Accepted': 163,
   'The authenticated market match was imported successfully. No funds moved.': 164,
+  'Resume Swap': 165,
+  'Continue settlement or recovery for one existing atomic swap.': 166,
+  'This action can fund Bitcoin, claim, refund, or otherwise advance post-funding settlement. Initial BLAKE funding remains disabled and requires the separate Fund BLAKE action.': 167,
+  'Swap ID / Prefix': 168,
+  'Optional local swap ID or unique hexadecimal prefix of at least 4 characters. Leave blank only when exactly one live resumable swap exists.': 169,
+  'Swap ID prefix must contain 4 to 12 hexadecimal characters.': 170,
+  'Swap resume failed.': 171,
+  'Multiple Active Swaps': 172,
+  'More than one swap has a live automatic path. Enter a swap ID prefix to choose explicitly.': 173,
+  'No Resumable Swaps': 174,
+  'No swap currently has an automatic recovery, settlement, or waiting path.': 175,
+  'Manual Attention Required': 176,
+  'The selected swap requires manual attention and was not handed to the autonomous runner.': 177,
+  'Swap Resume': 178,
+  'The settlement or recovery pass completed. Initial BLAKE funding was not performed.': 179,
 } as const
 
 /**
