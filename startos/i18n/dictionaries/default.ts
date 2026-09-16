@@ -188,6 +188,14 @@ const dict = {
   'The selected swap requires manual attention and was not handed to the autonomous runner.': 177,
   'Swap Resume': 178,
   'The settlement or recovery pass completed. Initial BLAKE funding was not performed.': 179,
+  'Show Participant Identity': 180,
+  'Show this BLAKE Swap installation’s public Nostr participant identity.': 181,
+  'Only public identity information is displayed. The private participant key is never returned.': 182,
+  'Participant identity could not be derived.': 183,
+  'Participant Identity': 184,
+  'This public identity is persistent for this BLAKE Swap installation.': 185,
+  'Nostr Public Key (hex)': 186,
+  'Nostr Public Key (npub)': 187,
 } as const
 
 /**

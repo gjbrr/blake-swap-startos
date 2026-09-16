@@ -12,6 +12,7 @@ import { checkEconomicReadiness } from './checkEconomicReadiness'
 import { fundBlake } from './fundBlake'
 import { resumeSwap } from './resumeSwap'
 import { viewMarket } from './viewMarket'
+import { showParticipantIdentity } from './showParticipantIdentity'
 import { createOffer } from './createOffer'
 import { cancelOffer } from './cancelOffer'
 import { takeOffer } from './takeOffer'
@@ -27,6 +28,7 @@ export const actions = sdk.Actions.of()
   .addAction(checkWalletReadiness)
   .addAction(checkEconomicReadiness)
   .addAction(viewMarket)
+  .addAction(showParticipantIdentity)
   .addAction(createOffer)
   .addAction(cancelOffer)
   .addAction(takeOffer)
