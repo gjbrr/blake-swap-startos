@@ -4,20 +4,23 @@
 
 # BLAKE Swap on StartOS
 
-This is an unfinished hello-world scaffold, not a functioning swap package.
-The image, daemon, port-80 readiness check, and backed-up `example-volume`
-mounted at `/data` are still template settings. There are no dependency
-declarations, actions, file models, or exposed interfaces for the swap engine.
-The remaining sections below are unfilled template documentation.
+BLAKE Swap is an operator-driven StartOS package for coordinating and executing
+BLAKE/BTC atomic swaps using external chain providers and configurable Nostr
+relays.
 
-The first-pass runtime assessment and ordered implementation plan are in
-[TODO.md](TODO.md#alpha-implementation-plan). Wallet access, networking, and
-persistent secret storage await approval; no upstream runtime has been wired in.
-The concrete same-server regtest proposal is in [DESIGN.md](DESIGN.md), including
-provider-contract gaps, existing node wallets, external relays, secret ownership
-and operator-driven recovery.
-Local TypeScript and JavaScript bundle checks pass for this scaffold only.
-No `.s9pk` or running-service verification has been completed.
+The package uses the existing BLAKE Swap engine and CLI. It persists swap state
+and its Nostr participant identity in the package volume, uses a StartOS Bitcoin
+Knots service as the BLAKE-chain provider, and connects to an explicitly
+configured ordinary Bitcoin Core RPC provider for BTC.
+
+Initial BLAKE HTLC funding remains an explicit operator action. Post-funding
+settlement and recovery can be resumed through guarded actions. Nostr is used
+for coordination only; chain state remains authoritative for settlement and
+recovery.
+
+This remains an alpha package for private development and testing. The package
+has been built, sideloaded, and exercised on StartOS hardware, but publication
+is blocked until licensing and package metadata are resolved.
 
 <!--
 TODO: fill in the sections below, then delete these comments.
@@ -75,7 +78,33 @@ why the heading set is fixed and ordered, and what belongs in each section:
 
 ## Limitations and Differences
 
-<!-- TODO -->
+### Wallet ownership and ordinary withdrawals
+
+BLAKE Swap does not create or custody separate application wallets. It uses
+explicitly configured wallets owned by the chain node services.
+
+The BLAKE-side wallet is managed by the Bitcoin Knots service. The BTC-side
+wallet is managed by the configured Bitcoin Core node. Ordinary wallet
+operations such as checking balances, generating general-purpose receive
+addresses, backing up wallets, restoring wallets, and sending funds to unrelated
+external wallets should be performed through those node services rather than
+through BLAKE Swap.
+
+BLAKE Swap intentionally does not expose a generic withdrawal or arbitrary RPC
+interface. Its wallet access is limited to operations needed for the atomic-swap
+workflow and narrowly scoped operator actions.
+
+Other current limitations include:
+
+- Bitcoin economic actions require the configured BTC node to be fully synced
+  and out of initial block download.
+- Nostr relay availability and write policy are controlled by the configured
+  relay operators. Some relays may impose their own access requirements.
+- The package does not bundle chain nodes or a local Nostr relay.
+- There is no custom web application; operation uses StartOS actions.
+- No open-source license has yet been established for this package or the
+  included upstream BLAKE Swap source snapshot.
+- Publication metadata and public project URLs remain unresolved.
 
 ---
 
