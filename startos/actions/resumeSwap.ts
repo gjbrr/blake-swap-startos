@@ -246,6 +246,7 @@ export const resumeSwap = sdk.Action.withInput(
               'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
               'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
 
+              'BLAKE_SWAP_TRANSPORT=nostr',
               await getNostrRelayEnv(effects),
 
               'BLAKE_SWAP_BLAKE_CLI=/opt/blake-swap/adapters/blake-rpc-cli',
@@ -283,9 +284,18 @@ export const resumeSwap = sdk.Action.withInput(
               result.stderr.toString().trim()
 
             if (result.exitCode !== 0) {
-              throw new Error(
+              const detail =
                 lastNonemptyLine(stderr) ??
-                  i18n('Swap resume failed.'),
+                lastNonemptyLine(stdout) ??
+                'stdout and stderr were empty'
+
+              const termination =
+                result.exitCode === null
+                  ? `signal ${result.exitSignal ?? 'unknown'}`
+                  : `exit ${result.exitCode}`
+
+              throw new Error(
+                `Swap resume failed (${termination}): ${detail}`,
               )
             }
 

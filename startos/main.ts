@@ -96,7 +96,7 @@ except Exception as exc:
 
   if (identityResult.exitCode !== 0) {
     throw new Error(
-      `Could not initialize persistent participant identity: ${identityResult.stderr}`,
+      `Could not initialize persistent participant identity: ${identityResult.stderr.toString()}`,
     )
   }
   return sdk.Daemons.of(effects).addDaemon('blake-swap', {
@@ -163,7 +163,7 @@ except Exception as exc:
         if (result.exitCode !== 0) {
           return {
             result: 'failure',
-            message: `BLAKE Swap engine import failed: ${result.stderr}`,
+            message: `BLAKE Swap engine import failed: ${result.stderr.toString()}`,
           }
         }
 

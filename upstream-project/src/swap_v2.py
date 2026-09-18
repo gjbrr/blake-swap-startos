@@ -962,6 +962,133 @@ def find_confirmed_htlc_spend(
             f"Swap has no {chain_name} funding blockhash"
         )
 
+    #
+    # Fast path: if durable state already records the exact confirmed
+    # settlement transaction, verify that transaction directly rather
+    # than rescanning every block since HTLC funding.
+    #
+    # The persisted txid is NOT trusted blindly.  We independently:
+    #
+    #   * fetch the exact transaction from its recorded block,
+    #   * require it to remain on the active chain,
+    #   * require at least one confirmation,
+    #   * prove that it spends this swap's HTLC outpoint, and
+    #   * classify the actual witness/script branch.
+    #
+    # Historical block scanning remains the recovery fallback when
+    # durable state does not know the spender.
+    #
+    known_spenders = []
+
+    if chain == "btc":
+        known_spenders = [
+            (
+                "claim",
+                swap.btc_claim_txid,
+                swap.btc_claim_blockhash,
+            ),
+            (
+                "refund",
+                swap.btc_refund_txid,
+                swap.btc_refund_blockhash,
+            ),
+        ]
+
+    elif chain == "blake":
+        known_spenders = [
+            (
+                "claim",
+                swap.blake_claim_txid,
+                swap.blake_claim_blockhash,
+            ),
+            (
+                "refund",
+                swap.blake_refund_txid,
+                swap.blake_refund_blockhash,
+            ),
+        ]
+
+    populated = [
+        (expected_branch, txid, blockhash)
+        for expected_branch, txid, blockhash in known_spenders
+        if txid is not None
+    ]
+
+    if len(populated) > 1:
+        raise RuntimeError(
+            "SECURITY FAILURE: durable state records multiple "
+            f"{chain_name} HTLC settlement transactions"
+        )
+
+    if populated:
+        expected_branch, settlement_txid, settlement_blockhash = (
+            populated[0]
+        )
+
+        if not settlement_blockhash:
+            raise RuntimeError(
+                "SECURITY FAILURE: durable state records "
+                f"{chain_name} {expected_branch} txid but no blockhash"
+            )
+
+        tx = cli(
+            "getrawtransaction",
+            settlement_txid,
+            True,
+            settlement_blockhash,
+        )
+
+        if tx.get("in_active_chain") is False:
+            raise RuntimeError(
+                "SECURITY FAILURE: recorded "
+                f"{chain_name} {expected_branch} transaction "
+                "is no longer on the active chain"
+            )
+
+        confirmations = int(
+            tx.get("confirmations", 0) or 0
+        )
+
+        if confirmations < 1:
+            raise RuntimeError(
+                "SECURITY FAILURE: recorded "
+                f"{chain_name} {expected_branch} transaction "
+                "is not confirmed on the active chain"
+            )
+
+        spends_htlc = any(
+            vin.get("txid") == funding_txid
+            and vin.get("vout") == funding_vout
+            for vin in tx.get("vin", [])
+        )
+
+        if not spends_htlc:
+            raise RuntimeError(
+                "SECURITY FAILURE: recorded "
+                f"{chain_name} {expected_branch} transaction "
+                "does not spend this swap's HTLC"
+            )
+
+        actual_branch = classify_htlc_spend(
+            tx,
+            funding_txid,
+            funding_vout,
+            swap.secret_hash,
+        )
+
+        if actual_branch != expected_branch:
+            raise RuntimeError(
+                "SECURITY FAILURE: recorded "
+                f"{chain_name} settlement branch mismatch: "
+                f"expected {expected_branch}, observed {actual_branch}"
+            )
+
+        return {
+            "txid": settlement_txid,
+            "blockhash": settlement_blockhash,
+            "branch": actual_branch,
+        }
+
     funding_block = cli(
         "getblock",
         funding_blockhash,
@@ -14124,6 +14251,7 @@ def _reconcile_observe_htlc(swap, chain):
     vout = getattr(work, vout_field)
     blockhash = getattr(work, block_field)
 
+
     if (txid is None) != (vout is None):
         raise RuntimeError(
             f"SECURITY FAILURE: incomplete recorded {chain.upper()} funding outpoint"
@@ -14135,11 +14263,13 @@ def _reconcile_observe_htlc(swap, chain):
         # Direct-chain recovery is deliberately allowed in this read-only
         # report.  It updates only this temporary in-memory copy.
         try:
+
             match = _reconcile_quiet(
                 scan_chain_for_expected_funding,
                 work,
                 chain,
             )
+
         except Exception as e:
             return {
                 "status": "unknown",
@@ -14157,7 +14287,9 @@ def _reconcile_observe_htlc(swap, chain):
         setattr(work, vout_field, vout)
         setattr(work, block_field, blockhash)
 
+
     utxo = cli("gettxout", txid, vout)
+
 
     if utxo:
         try:
@@ -14188,11 +14320,13 @@ def _reconcile_observe_htlc(swap, chain):
         }
 
     try:
+
         spend = _reconcile_quiet(
             find_confirmed_htlc_spend,
             work,
             chain,
         )
+
     except Exception as e:
         return {
             "status": "pending-or-ambiguous",
@@ -14607,9 +14741,11 @@ def _reconcile_execution_readiness(
 
 def build_reconcile_report(swap):
     """Build a machine-readable, read-only protocol report."""
+
     negotiation_status, negotiation_reason = (
         _reconcile_negotiation_status(swap)
     )
+
 
     try:
         role, me, counterparty = _reconcile_local_role(swap)
@@ -14682,9 +14818,11 @@ def build_reconcile_report(swap):
         }
 
     blake_height = int(blake_cli("getblockcount"))
+
     btc_height = int(btc_cli("getblockcount"))
 
     blake = _reconcile_observe_htlc(swap, "blake")
+
     btc = _reconcile_observe_htlc(swap, "btc")
 
     secret_value = None
@@ -14708,6 +14846,7 @@ def build_reconcile_report(swap):
                 "SECURITY FAILURE: locally known secret does not match swap hash"
             )
 
+
     action, reason = _reconcile_next_action(
         swap,
         role,
@@ -14717,6 +14856,8 @@ def build_reconcile_report(swap):
         btc_height,
     )
 
+
+
     readiness = _reconcile_execution_readiness(
         swap,
         role,
@@ -14724,6 +14865,7 @@ def build_reconcile_report(swap):
         blake_height,
         btc_height,
     )
+
 
     return {
         "swap_id": swap.swap_id,
@@ -15074,9 +15216,14 @@ def command_next(args):
     # A. Authenticated Bob accept messages waiting to be imported.
     #    This is coordination only: no funds move.
     # --------------------------------------------------------------
-    for path in sorted(BASE_SWAP_DIR.glob("*.json")):
+
+    resume_paths = sorted(BASE_SWAP_DIR.glob("*.json"))
+
+
+    for path in resume_paths:
         if len(path.stem) != 12:
             continue
+
 
         try:
             swap = load_swap(
@@ -15554,7 +15701,11 @@ def command_next(args):
     # --------------------------------------------------------------
     funding_ready = []
 
-    for path in sorted(BASE_SWAP_DIR.glob("*.json")):
+
+    resume_paths = sorted(BASE_SWAP_DIR.glob("*.json"))
+
+
+    for path in resume_paths:
         if len(path.stem) != 12:
             continue
 
@@ -15696,9 +15847,11 @@ def command_next(args):
             ):
                 continue
 
+
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report = build_reconcile_report(swap)
+
         except Exception:
             continue
 
@@ -16363,9 +16516,12 @@ def command_resume(args):
     attention = []
     explicit = getattr(args, "swap_id", None)
 
+
     for path in sorted(BASE_SWAP_DIR.glob("*.json")):
+
         if len(path.stem) != 12:
             continue
+
 
         if explicit is not None:
             prefix = explicit.strip().lower()
@@ -16375,6 +16531,7 @@ def command_resume(args):
                 )
             if not path.stem.startswith(prefix):
                 continue
+
 
         try:
             swap = load_swap(
@@ -16387,15 +16544,20 @@ def command_resume(args):
         except Exception:
             continue
 
+
+
         if me not in {
             swap.nostr_alice_pub,
             swap.nostr_bob_pub,
         }:
             continue
 
+
+
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report = build_reconcile_report(swap)
+
         except Exception:
             attention.append(
                 {
