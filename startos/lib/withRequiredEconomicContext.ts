@@ -1,7 +1,4 @@
-export async function withRequiredEconomicContext<
-  Context,
-  Result,
->(
+export async function withRequiredEconomicContext<Context, Result>(
   requireContext: () => Promise<Context>,
   execute: (context: Context) => Promise<Result>,
 ): Promise<Result> {

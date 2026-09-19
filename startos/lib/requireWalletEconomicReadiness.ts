@@ -17,10 +17,7 @@ export function requireWalletObservationEconomicReadiness(
   observation: WalletReadinessObservation,
 ): WalletReadinessObservation {
   if (!isObservationEconomicallyReady(observation)) {
-    throw new WalletObservationNotEconomicallyReadyError(
-      chain,
-      observation,
-    )
+    throw new WalletObservationNotEconomicallyReadyError(chain, observation)
   }
 
   return observation

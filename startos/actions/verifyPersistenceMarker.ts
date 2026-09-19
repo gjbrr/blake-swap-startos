@@ -31,7 +31,7 @@ export const verifyPersistenceMarker = sdk.Action.withoutInput(
       { imageId: 'blake-swap' },
       mounts,
       'verify-persistence-marker',
-      async sub => {
+      async (sub) => {
         const result = await sub.exec([
           'python3',
           '-c',
@@ -45,9 +45,7 @@ export const verifyPersistenceMarker = sdk.Action.withoutInput(
         ])
 
         if (result.exitCode !== 0) {
-          throw new Error(
-            i18n('Persistence marker is missing or invalid.'),
-          )
+          throw new Error(i18n('Persistence marker is missing or invalid.'))
         }
 
         return MARKER

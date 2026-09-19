@@ -29,7 +29,7 @@ export const verifyEngine = sdk.Action.withoutInput(
       { imageId: 'blake-swap' },
       mounts,
       'verify-engine',
-      async sub => {
+      async (sub) => {
         const result = await sub.exec([
           'python3',
           '-c',

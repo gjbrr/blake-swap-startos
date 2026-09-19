@@ -1,16 +1,11 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import { getNostrRelayEnv } from '../file-models/nostrRelays'
+import { getBtcFeePolicyEnv } from '../file-models/btcFeePolicy'
 import { walletMapping } from '../file-models/walletMapping'
-import {
-  requireBlakeEconomicContextReadiness,
-} from '../lib/requireBlakeEconomicContextReadiness'
-import {
-  requireBtcEconomicContextReadiness,
-} from '../lib/requireBtcEconomicContextReadiness'
-import {
-  withSwapEconomicContext,
-} from '../lib/withSwapEconomicContext'
+import { requireBlakeEconomicContextReadiness } from '../lib/requireBlakeEconomicContextReadiness'
+import { requireBtcEconomicContextReadiness } from '../lib/requireBtcEconomicContextReadiness'
+import { withSwapEconomicContext } from '../lib/withSwapEconomicContext'
 
 const { InputSpec, Value } = sdk
 
@@ -34,18 +29,14 @@ const inputSpec = InputSpec.of({
 function lastNonemptyLine(value: string): string | null {
   const lines = value
     .split('\n')
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
 
-  return lines.length > 0
-    ? lines[lines.length - 1]
-    : null
+  return lines.length > 0 ? lines[lines.length - 1] : null
 }
 
 function findSwapId(stdout: string): string | null {
-  const match = stdout.match(
-    /^swap(?: id)?:\s*([0-9a-f]{12})\s*$/im,
-  )
+  const match = stdout.match(/^swap(?: id)?:\s*([0-9a-f]{12})\s*$/im)
 
   return match?.[1] ?? null
 }
@@ -54,42 +45,24 @@ function summarizeResult(stdout: string): string {
   const swapId = findSwapId(stdout)
 
   if (stdout.includes('SWAP ALREADY SETTLED')) {
-    return swapId
-      ? `swap=${swapId}\nstate=COMPLETE`
-      : 'already settled'
+    return swapId ? `swap=${swapId}\nstate=COMPLETE` : 'already settled'
   }
 
   if (stdout.includes('SWAP ALREADY REFUNDED')) {
-    return swapId
-      ? `swap=${swapId}\nstate=BLAKE_REFUNDED`
-      : 'already refunded'
+    return swapId ? `swap=${swapId}\nstate=BLAKE_REFUNDED` : 'already refunded'
   }
 
   if (
-    stdout.includes(
-      'RUN RESULT: waiting for counterparty or chain condition',
-    )
+    stdout.includes('RUN RESULT: waiting for counterparty or chain condition')
   ) {
-    return swapId
-      ? `swap=${swapId}\nstate=waiting`
-      : 'waiting'
+    return swapId ? `swap=${swapId}\nstate=waiting` : 'waiting'
   }
 
-  if (
-    stdout.includes(
-      'RUN RESULT: settled; no action required',
-    )
-  ) {
-    return swapId
-      ? `swap=${swapId}\nstate=settled`
-      : 'settled'
+  if (stdout.includes('RUN RESULT: settled; no action required')) {
+    return swapId ? `swap=${swapId}\nstate=settled` : 'settled'
   }
 
-  if (
-    stdout.includes(
-      'RUN RESULT: manual attention required',
-    )
-  ) {
+  if (stdout.includes('RUN RESULT: manual attention required')) {
     return swapId
       ? `swap=${swapId}\nstate=manual-attention`
       : 'manual attention required'
@@ -122,28 +95,19 @@ export const resumeSwap = sdk.Action.withInput(
   async () => null,
 
   async ({ effects, input }) => {
-    const requested =
-      input.swapId?.trim().toLowerCase() ?? ''
+    const requested = input.swapId?.trim().toLowerCase() ?? ''
 
-    if (
-      requested !== '' &&
-      !/^[0-9a-f]{4,12}$/.test(requested)
-    ) {
+    if (requested !== '' && !/^[0-9a-f]{4,12}$/.test(requested)) {
       throw new Error(
-        i18n(
-          'Swap ID prefix must contain 4 to 12 hexadecimal characters.',
-        ),
+        i18n('Swap ID prefix must contain 4 to 12 hexadecimal characters.'),
       )
     }
 
-    const savedMapping =
-      await walletMapping.read().const(effects)
+    const savedMapping = await walletMapping.read().const(effects)
 
-    const blakeWallet =
-      savedMapping?.blakeWallet.trim() ?? ''
+    const blakeWallet = savedMapping?.blakeWallet.trim() ?? ''
 
-    const btcWallet =
-      savedMapping?.btcWallet.trim() ?? ''
+    const btcWallet = savedMapping?.btcWallet.trim() ?? ''
 
     const blakeRpcAddr = await sdk.host
       .getBridgeAddress(effects, {
@@ -155,9 +119,7 @@ export const resumeSwap = sdk.Action.withInput(
       .once()
 
     if (!blakeRpcAddr) {
-      throw new Error(
-        i18n('BLAKE RPC is unavailable.'),
-      )
+      throw new Error(i18n('BLAKE RPC is unavailable.'))
     }
 
     const mounts = sdk.Mounts.of()
@@ -180,23 +142,17 @@ export const resumeSwap = sdk.Action.withInput(
       { imageId: 'blake-swap' },
       mounts,
       'resume-swap',
-      async sub => {
-        async function runJson(
-          command: string[],
-        ): Promise<unknown> {
+      async (sub) => {
+        async function runJson(command: string[]): Promise<unknown> {
           const result = await sub.exec(command)
 
           if (result.exitCode !== 0) {
             throw new Error(
-              lastNonemptyLine(
-                result.stderr.toString(),
-              ) ?? 'wallet RPC failed',
+              lastNonemptyLine(result.stderr.toString()) ?? 'wallet RPC failed',
             )
           }
 
-          return JSON.parse(
-            result.stdout.toString(),
-          ) as unknown
+          return JSON.parse(result.stdout.toString()) as unknown
         }
 
         /*
@@ -207,33 +163,23 @@ export const resumeSwap = sdk.Action.withInput(
          */
         return withSwapEconomicContext(
           () =>
-            requireBlakeEconomicContextReadiness(
-              effects,
-              runJson,
-              {
-                cli:
-                  '/opt/blake-swap/adapters/blake-rpc-cli',
-                wallet: blakeWallet,
-                env: [
-                  `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                  'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-                ],
-              },
-            ),
+            requireBlakeEconomicContextReadiness(effects, runJson, {
+              cli: '/opt/blake-swap/adapters/blake-rpc-cli',
+              wallet: blakeWallet,
+              env: [
+                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
+                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+              ],
+            }),
 
           () =>
-            requireBtcEconomicContextReadiness(
-              effects,
-              runJson,
-              {
-                cli:
-                  '/opt/blake-swap/adapters/btc-rpc-cli',
-                wallet: btcWallet,
-                env: [
-                  'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-                ],
-              },
-            ),
+            requireBtcEconomicContextReadiness(effects, runJson, {
+              cli: '/opt/blake-swap/adapters/btc-rpc-cli',
+              wallet: btcWallet,
+              env: [
+                'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+              ],
+            }),
 
           async () => {
             const command = [
@@ -262,6 +208,9 @@ export const resumeSwap = sdk.Action.withInput(
               'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
 
               'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+              'BLAKE_SWAP_BTC_BATCH_SCAN=1',
+
+              ...(await getBtcFeePolicyEnv(effects)),
 
               `BLAKE_SWAP_BLAKE_WALLET=${blakeWallet}`,
               `BLAKE_SWAP_BTC_WALLET=${btcWallet}`,
@@ -275,40 +224,46 @@ export const resumeSwap = sdk.Action.withInput(
               command.push(requested)
             }
 
-            const result = await sub.exec(command)
+            const resumeStartedAt = Date.now()
 
-            const stdout =
-              result.stdout.toString().trim()
+            const result = await sub.exec(command, undefined, 120_000)
 
-            const stderr =
-              result.stderr.toString().trim()
+            const resumeElapsedMs = Date.now() - resumeStartedAt
+
+            const stdout = result.stdout.toString().trim()
+
+            const stderr = result.stderr.toString().trim()
 
             if (result.exitCode !== 0) {
-              const detail =
-                lastNonemptyLine(stderr) ??
-                lastNonemptyLine(stdout) ??
-                'stdout and stderr were empty'
+              const stdoutTail = stdout.split('\n').slice(-30).join('\n')
+
+              const stderrTail = stderr.split('\n').slice(-30).join('\n')
+
+              const detail = [
+                stdoutTail
+                  ? `RESUME STDOUT TAIL:\n${stdoutTail}`
+                  : 'RESUME STDOUT TAIL: empty',
+                stderrTail
+                  ? `RESUME STDERR TAIL:\n${stderrTail}`
+                  : 'RESUME STDERR TAIL: empty',
+              ].join('\n\n')
 
               const termination =
                 result.exitCode === null
                   ? `signal ${result.exitSignal ?? 'unknown'}`
                   : `exit ${result.exitCode}`
 
+              const elapsed = `${(resumeElapsedMs / 1000).toFixed(1)}s`
+
               throw new Error(
-                `Swap resume failed (${termination}): ${detail}`,
+                `Swap resume failed (${termination}, elapsed=${elapsed}): ${detail}`,
               )
             }
 
-            if (
-              stdout.includes(
-                'MULTIPLE ACTIVE SWAPS',
-              )
-            ) {
+            if (stdout.includes('MULTIPLE ACTIVE SWAPS')) {
               return {
                 version: '1',
-                title: i18n(
-                  'Multiple Active Swaps',
-                ),
+                title: i18n('Multiple Active Swaps'),
                 message: i18n(
                   'More than one swap has a live automatic path. Enter a swap ID prefix to choose explicitly.',
                 ),
@@ -324,16 +279,10 @@ export const resumeSwap = sdk.Action.withInput(
               }
             }
 
-            if (
-              stdout.includes(
-                'NO RESUMABLE SWAPS',
-              )
-            ) {
+            if (stdout.includes('NO RESUMABLE SWAPS')) {
               return {
                 version: '1',
-                title: i18n(
-                  'No Resumable Swaps',
-                ),
+                title: i18n('No Resumable Swaps'),
                 message: i18n(
                   'No swap currently has an automatic recovery, settlement, or waiting path.',
                 ),
@@ -349,16 +298,10 @@ export const resumeSwap = sdk.Action.withInput(
               }
             }
 
-            if (
-              stdout.includes(
-                'MANUAL ATTENTION REQUIRED',
-              )
-            ) {
+            if (stdout.includes('MANUAL ATTENTION REQUIRED')) {
               return {
                 version: '1',
-                title: i18n(
-                  'Manual Attention Required',
-                ),
+                title: i18n('Manual Attention Required'),
                 message: i18n(
                   'The selected swap requires manual attention and was not handed to the autonomous runner.',
                 ),
@@ -384,8 +327,7 @@ export const resumeSwap = sdk.Action.withInput(
                 type: 'single',
                 name: i18n('Result'),
                 description: null,
-                value:
-                  summarizeResult(stdout),
+                value: summarizeResult(stdout),
                 masked: false,
                 copyable: true,
                 qr: false,

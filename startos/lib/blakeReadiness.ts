@@ -3,11 +3,6 @@ export type BlakeBlockchainInfo = {
   initialblockdownload: unknown
 }
 
-export function isBlakeEconomicallyReady(
-  info: BlakeBlockchainInfo,
-): boolean {
-  return (
-    info.chain === 'main' &&
-    info.initialblockdownload === false
-  )
+export function isBlakeEconomicallyReady(info: BlakeBlockchainInfo): boolean {
+  return info.chain === 'main' && info.initialblockdownload === false
 }

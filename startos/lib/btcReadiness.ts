@@ -3,11 +3,6 @@ export type BtcBlockchainInfo = {
   initialblockdownload: unknown
 }
 
-export function isBtcEconomicallyReady(
-  info: BtcBlockchainInfo,
-): boolean {
-  return (
-    info.chain === 'main' &&
-    info.initialblockdownload === false
-  )
+export function isBtcEconomicallyReady(info: BtcBlockchainInfo): boolean {
+  return info.chain === 'main' && info.initialblockdownload === false
 }

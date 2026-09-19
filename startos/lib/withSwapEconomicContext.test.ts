@@ -1,6 +1,4 @@
-import {
-  withSwapEconomicContext,
-} from './withSwapEconomicContext'
+import { withSwapEconomicContext } from './withSwapEconomicContext'
 
 async function testBothContextsRequired() {
   let executed = false
@@ -36,27 +34,18 @@ async function testBothContextsRequired() {
   }
 
   if (executed) {
-    throw new Error(
-      'economic callback ran without both contexts',
-    )
+    throw new Error('economic callback ran without both contexts')
   }
 
-  if (
-    !(caught instanceof Error) ||
-    caught.message !== 'BTC not ready'
-  ) {
-    throw new Error(
-      'BTC readiness failure was not propagated',
-    )
+  if (!(caught instanceof Error) || caught.message !== 'BTC not ready') {
+    throw new Error('BTC readiness failure was not propagated')
   }
 }
 
 async function main() {
   await testBothContextsRequired()
 
-  console.log(
-    'PASS combined swap economic context gate',
-  )
+  console.log('PASS combined swap economic context gate')
 }
 
 void main()

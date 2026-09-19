@@ -6,12 +6,16 @@ import { verifyPersistenceMarker } from './verifyPersistenceMarker'
 import { checkBlakeRpc } from './checkBlakeRpc'
 import { checkBtcRpc } from './checkBtcRpc'
 import { configureBtcProvider } from './configureBtcProvider'
+import { configureBtcFeePolicy } from './configureBtcFeePolicy'
 import { configureNostrRelays } from './configureNostrRelays'
 import { configureWallets } from './configureWallets'
 import { checkWalletReadiness } from './checkWalletReadiness'
 import { checkEconomicReadiness } from './checkEconomicReadiness'
 import { fundBlake } from './fundBlake'
+import { publishBlakeFunding } from './publishBlakeFunding'
+import { receiveBtcFunding } from './receiveBtcFunding'
 import { resumeSwap } from './resumeSwap'
+import { reconcileSwap } from './reconcileSwap'
 import { viewMarket } from './viewMarket'
 import { showParticipantIdentity } from './showParticipantIdentity'
 import {
@@ -21,6 +25,7 @@ import {
 import { createOffer } from './createOffer'
 import { cancelOffer } from './cancelOffer'
 import { takeOffer } from './takeOffer'
+import { acceptTake } from './acceptTake'
 import { acceptMatch } from './acceptMatch'
 
 export const actions = sdk.Actions.of()
@@ -29,6 +34,7 @@ export const actions = sdk.Actions.of()
   .addAction(verifyPersistenceMarker)
   .addAction(checkBlakeRpc)
   .addAction(configureBtcProvider)
+  .addAction(configureBtcFeePolicy)
   .addAction(configureNostrRelays)
   .addAction(configureWallets)
   .addAction(checkWalletReadiness)
@@ -40,7 +46,11 @@ export const actions = sdk.Actions.of()
   .addAction(createOffer)
   .addAction(cancelOffer)
   .addAction(takeOffer)
+  .addAction(acceptTake)
   .addAction(acceptMatch)
   .addAction(fundBlake)
+  .addAction(publishBlakeFunding)
+  .addAction(receiveBtcFunding)
+  .addAction(reconcileSwap)
   .addAction(resumeSwap)
   .addAction(checkBtcRpc)

@@ -39,7 +39,7 @@ export const btcProvider = FileHelper.raw<BtcProviderConfig>(
     base: sdk.volumes.main,
     subpath: 'config/btc-provider.json',
   },
-  data => `${JSON.stringify(data, null, 2)}\n`,
-  raw => JSON.parse(raw),
+  (data) => `${JSON.stringify(data, null, 2)}\n`,
+  (raw) => JSON.parse(raw),
   validateBtcProvider,
 )

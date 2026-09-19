@@ -7,9 +7,7 @@ const { InputSpec, Value } = sdk
 const inputSpec = InputSpec.of({
   direction: Value.select({
     name: i18n('Offer Direction'),
-    description: i18n(
-      'Choose which asset you are offering to give.',
-    ),
+    description: i18n('Choose which asset you are offering to give.'),
     default: 'blake-for-btc',
     values: {
       'blake-for-btc': 'Give BLAKE → Receive BTC',
@@ -19,9 +17,7 @@ const inputSpec = InputSpec.of({
 
   blakeAmount: Value.number({
     name: i18n('BLAKE Amount'),
-    description: i18n(
-      'Amount of BLAKE in the advertised trade.',
-    ),
+    description: i18n('Amount of BLAKE in the advertised trade.'),
     required: true,
     default: null,
     min: 0,
@@ -32,9 +28,7 @@ const inputSpec = InputSpec.of({
 
   btcSats: Value.number({
     name: i18n('BTC Amount'),
-    description: i18n(
-      'Bitcoin amount in satoshis in the advertised trade.',
-    ),
+    description: i18n('Bitcoin amount in satoshis in the advertised trade.'),
     required: true,
     default: null,
     min: 1,
@@ -45,9 +39,7 @@ const inputSpec = InputSpec.of({
 
   lifetimeMinutes: Value.number({
     name: i18n('Offer Lifetime'),
-    description: i18n(
-      'How long the offer remains open before expiring.',
-    ),
+    description: i18n('How long the offer remains open before expiring.'),
     required: true,
     default: 60,
     min: 1,
@@ -58,9 +50,7 @@ const inputSpec = InputSpec.of({
 })
 
 function extractOfferId(stdout: string): string {
-  const match = stdout.match(
-    /^offer id:\s*([0-9a-f]{64})\s*$/im,
-  )
+  const match = stdout.match(/^offer id:\s*([0-9a-f]{64})\s*$/im)
 
   if (!match) {
     throw new Error(
@@ -76,9 +66,7 @@ export const createOffer = sdk.Action.withInput(
 
   async () => ({
     name: i18n('Create Offer'),
-    description: i18n(
-      'Publish a signed BLAKE/BTC market offer to Nostr.',
-    ),
+    description: i18n('Publish a signed BLAKE/BTC market offer to Nostr.'),
     warning: i18n(
       'This publishes a public signed advertisement. It does not fund an HTLC or move BLAKE or Bitcoin.',
     ),
@@ -94,19 +82,12 @@ export const createOffer = sdk.Action.withInput(
 
   async ({ effects, input }) => {
     if (input.blakeAmount <= 0) {
-      throw new Error(
-        i18n('BLAKE amount must be positive.'),
-      )
+      throw new Error(i18n('BLAKE amount must be positive.'))
     }
 
-    if (
-      !Number.isInteger(input.btcSats) ||
-      input.btcSats <= 0
-    ) {
+    if (!Number.isInteger(input.btcSats) || input.btcSats <= 0) {
       throw new Error(
-        i18n(
-          'BTC amount must be a positive whole number of satoshis.',
-        ),
+        i18n('BTC amount must be a positive whole number of satoshis.'),
       )
     }
 
@@ -115,9 +96,7 @@ export const createOffer = sdk.Action.withInput(
       input.lifetimeMinutes <= 0
     ) {
       throw new Error(
-        i18n(
-          'Offer lifetime must be a positive whole number of minutes.',
-        ),
+        i18n('Offer lifetime must be a positive whole number of minutes.'),
       )
     }
 
@@ -132,83 +111,64 @@ export const createOffer = sdk.Action.withInput(
       readonly: false,
     })
 
-    const result =
-      await sdk.SubContainer.withTemp(
-        effects,
-        { imageId: 'blake-swap' },
-        mounts,
-        'create-offer',
-        async sub =>
-          sub.exec([
-            '/usr/bin/env',
-            'PYTHONPATH=/opt/blake-swap/src',
-            'BLAKE_SWAP_STATE_DIR=/data/swaps',
-            'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
-            'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
-            'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
-            await getNostrRelayEnv(effects),
-            'python3',
-            '/opt/blake-swap/src/swap_v2.py',
-            'publish-market-offer',
-            '--direction',
-            input.direction,
-            '--blake',
-            String(input.blakeAmount),
-            '--sats',
-            String(input.btcSats),
-            '--minutes',
-            String(input.lifetimeMinutes),
-          ]),
-      )
+    const result = await sdk.SubContainer.withTemp(
+      effects,
+      { imageId: 'blake-swap' },
+      mounts,
+      'create-offer',
+      async (sub) =>
+        sub.exec([
+          '/usr/bin/env',
+          'PYTHONPATH=/opt/blake-swap/src',
+          'BLAKE_SWAP_STATE_DIR=/data/swaps',
+          'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
+          'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
+          'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
+          await getNostrRelayEnv(effects),
+          'python3',
+          '/opt/blake-swap/src/swap_v2.py',
+          'publish-market-offer',
+          '--direction',
+          input.direction,
+          '--blake',
+          String(input.blakeAmount),
+          '--sats',
+          String(input.btcSats),
+          '--minutes',
+          String(input.lifetimeMinutes),
+        ]),
+    )
 
-    const stdout =
-      result.stdout.toString().trim()
+    const stdout = result.stdout.toString().trim()
 
-    const stderr =
-      result.stderr.toString().trim()
+    const stderr = result.stderr.toString().trim()
 
     if (result.exitCode !== 0) {
+      throw new Error(stderr || i18n('Offer publication failed.'))
+    }
+
+    if (!stdout.includes('MARKET OFFER PUBLISHED')) {
       throw new Error(
-        stderr ||
-          i18n('Offer publication failed.'),
+        i18n('Offer command completed without confirming publication.'),
       )
     }
 
-    if (
-      !stdout.includes(
-        'MARKET OFFER PUBLISHED',
-      )
-    ) {
-      throw new Error(
-        i18n(
-          'Offer command completed without confirming publication.',
-        ),
-      )
-    }
-
-    const offerId =
-      extractOfferId(stdout)
+    const offerId = extractOfferId(stdout)
 
     const giving =
       input.direction === 'blake-for-btc'
         ? `${input.blakeAmount} BLAKE`
-        : `${input.btcSats.toLocaleString(
-            'en-US',
-          )} sats`
+        : `${input.btcSats.toLocaleString('en-US')} sats`
 
     const wanting =
       input.direction === 'blake-for-btc'
-        ? `${input.btcSats.toLocaleString(
-            'en-US',
-          )} sats`
+        ? `${input.btcSats.toLocaleString('en-US')} sats`
         : `${input.blakeAmount} BLAKE`
 
     return {
       version: '1',
       title: i18n('Market Offer Published'),
-      message: i18n(
-        'Your signed market offer was published successfully.',
-      ),
+      message: i18n('Your signed market offer was published successfully.'),
       result: {
         type: 'group',
         value: [

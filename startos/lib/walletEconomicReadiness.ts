@@ -17,9 +17,7 @@ export function isWalletEconomicallyReady(
 }
 
 export class WalletNotEconomicallyReadyError extends Error {
-  constructor(
-    readonly wallet: WalletEconomicReadinessInput,
-  ) {
+  constructor(readonly wallet: WalletEconomicReadinessInput) {
     super('Wallet is not economically ready')
   }
 }

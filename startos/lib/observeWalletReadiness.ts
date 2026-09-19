@@ -7,9 +7,7 @@ import {
   WalletReadinessObservation,
 } from './walletReadinessObservation'
 
-type RunJson = (
-  command: string[],
-) => Promise<unknown>
+type RunJson = (command: string[]) => Promise<unknown>
 
 export type WalletObserverInput = {
   cli: string
@@ -27,31 +25,27 @@ export async function observeWalletReadiness(
     return emptyWalletReadinessObservation()
   }
 
-  const walletDir = await runJson([
+  const walletDir = (await runJson([
     'env',
     ...input.env,
     input.cli,
     'listwalletdir',
-  ]) as {
+  ])) as {
     wallets?: Array<{ name?: string }>
   }
 
-  const loadedWallets = await runJson([
+  const loadedWallets = (await runJson([
     'env',
     ...input.env,
     input.cli,
     'listwallets',
-  ]) as unknown[]
+  ])) as unknown[]
 
   const exists =
     Array.isArray(walletDir.wallets) &&
-    walletDir.wallets.some(
-      item => item?.name === wallet,
-    )
+    walletDir.wallets.some((item) => item?.name === wallet)
 
-  const loaded =
-    Array.isArray(loadedWallets) &&
-    loadedWallets.includes(wallet)
+  const loaded = Array.isArray(loadedWallets) && loadedWallets.includes(wallet)
 
   let signing: WalletSigningCapability = {
     privateKeysEnabled: null,
@@ -60,13 +54,13 @@ export async function observeWalletReadiness(
   }
 
   if (loaded) {
-    const walletInfo = await runJson([
+    const walletInfo = (await runJson([
       'env',
       ...input.env,
       input.cli,
       `-rpcwallet=${wallet}`,
       'getwalletinfo',
-    ]) as Record<string, unknown>
+    ])) as Record<string, unknown>
 
     signing = getWalletSigningCapability(walletInfo)
   }

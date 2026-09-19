@@ -8,9 +8,7 @@ const { InputSpec, Value } = sdk
 const inputSpec = InputSpec.of({
   rpcUrl: Value.text({
     name: i18n('BTC RPC URL'),
-    description: i18n(
-      'HTTPS URL for an ordinary Bitcoin RPC endpoint.',
-    ),
+    description: i18n('HTTPS URL for an ordinary Bitcoin RPC endpoint.'),
     required: true,
     default: null,
     placeholder: 'https://bitcoin-rpc.example:8443/',
@@ -19,9 +17,7 @@ const inputSpec = InputSpec.of({
 
   rpcUsername: Value.text({
     name: i18n('BTC RPC Username'),
-    description: i18n(
-      'RPC username for the ordinary Bitcoin node.',
-    ),
+    description: i18n('RPC username for the ordinary Bitcoin node.'),
     required: true,
     default: null,
     masked: false,
@@ -46,8 +42,7 @@ const inputSpec = InputSpec.of({
     default: null,
     minRows: 5,
     maxRows: 10,
-    placeholder:
-      '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
+    placeholder: '-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----',
   }),
 })
 
@@ -113,9 +108,7 @@ export const configureBtcProvider = sdk.Action.withInput(
     }
 
     const configDir = sdk.volumes.main.subpath('config')
-    const configPath = sdk.volumes.main.subpath(
-      'config/btc-provider.json',
-    )
+    const configPath = sdk.volumes.main.subpath('config/btc-provider.json')
 
     await fs.mkdir(configDir, {
       recursive: true,

@@ -2,15 +2,9 @@ import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import { getNostrRelayEnv } from '../file-models/nostrRelays'
 import { walletMapping } from '../file-models/walletMapping'
-import {
-  requireBlakeEconomicContextReadiness,
-} from '../lib/requireBlakeEconomicContextReadiness'
-import {
-  requireBtcEconomicContextReadiness,
-} from '../lib/requireBtcEconomicContextReadiness'
-import {
-  withSwapEconomicContext,
-} from '../lib/withSwapEconomicContext'
+import { requireBlakeEconomicContextReadiness } from '../lib/requireBlakeEconomicContextReadiness'
+import { requireBtcEconomicContextReadiness } from '../lib/requireBtcEconomicContextReadiness'
+import { withSwapEconomicContext } from '../lib/withSwapEconomicContext'
 
 const { InputSpec, Value } = sdk
 
@@ -34,24 +28,16 @@ const inputSpec = InputSpec.of({
 function lastNonemptyLine(value: string): string | null {
   const lines = value
     .split('\n')
-    .map(line => line.trim())
+    .map((line) => line.trim())
     .filter(Boolean)
 
-  return lines.length > 0
-    ? lines[lines.length - 1]
-    : null
+  return lines.length > 0 ? lines[lines.length - 1] : null
 }
 
 function matchResultValue(stdout: string): string {
-  const match =
-    stdout.match(
-      /^match(?: id)?:\s*([0-9a-f]{64})\s*$/im,
-    )
+  const match = stdout.match(/^match(?: id)?:\s*([0-9a-f]{64})\s*$/im)
 
-  const swap =
-    stdout.match(
-      /^swap(?: id)?:\s*([0-9a-f]{12})\s*$/im,
-    )
+  const swap = stdout.match(/^swap(?: id)?:\s*([0-9a-f]{12})\s*$/im)
 
   const values: string[] = []
 
@@ -71,10 +57,7 @@ function pendingMatchesValue(stdout: string): string {
     ...stdout.matchAll(
       /^\d+\.\s+match=([0-9a-f]+)\s+swap=([0-9a-f]+|-)\s*$/gim,
     ),
-  ].map(
-    item =>
-      `match=${item[1]} swap=${item[2]}`,
-  )
+  ].map((item) => `match=${item[1]} swap=${item[2]}`)
 
   return values.join('\n') || 'multiple pending matches'
 }
@@ -101,28 +84,19 @@ export const acceptMatch = sdk.Action.withInput(
   async () => null,
 
   async ({ effects, input }) => {
-    const requested =
-      input.matchId?.trim().toLowerCase() ?? ''
+    const requested = input.matchId?.trim().toLowerCase() ?? ''
 
-    if (
-      requested !== '' &&
-      !/^[0-9a-f]{8,64}$/.test(requested)
-    ) {
+    if (requested !== '' && !/^[0-9a-f]{8,64}$/.test(requested)) {
       throw new Error(
-        i18n(
-          'Match ID prefix must contain 8 to 64 hexadecimal characters.',
-        ),
+        i18n('Match ID prefix must contain 8 to 64 hexadecimal characters.'),
       )
     }
 
-    const savedMapping =
-      await walletMapping.read().const(effects)
+    const savedMapping = await walletMapping.read().const(effects)
 
-    const blakeWallet =
-      savedMapping?.blakeWallet.trim() ?? ''
+    const blakeWallet = savedMapping?.blakeWallet.trim() ?? ''
 
-    const btcWallet =
-      savedMapping?.btcWallet.trim() ?? ''
+    const btcWallet = savedMapping?.btcWallet.trim() ?? ''
 
     const blakeRpcAddr = await sdk.host
       .getBridgeAddress(effects, {
@@ -134,9 +108,7 @@ export const acceptMatch = sdk.Action.withInput(
       .once()
 
     if (!blakeRpcAddr) {
-      throw new Error(
-        i18n('BLAKE RPC is unavailable.'),
-      )
+      throw new Error(i18n('BLAKE RPC is unavailable.'))
     }
 
     /*
@@ -168,23 +140,17 @@ export const acceptMatch = sdk.Action.withInput(
       { imageId: 'blake-swap' },
       mounts,
       'accept-match',
-      async sub => {
-        async function runJson(
-          command: string[],
-        ): Promise<unknown> {
+      async (sub) => {
+        async function runJson(command: string[]): Promise<unknown> {
           const result = await sub.exec(command)
 
           if (result.exitCode !== 0) {
             throw new Error(
-              lastNonemptyLine(
-                result.stderr.toString(),
-              ) ?? 'wallet RPC failed',
+              lastNonemptyLine(result.stderr.toString()) ?? 'wallet RPC failed',
             )
           }
 
-          return JSON.parse(
-            result.stdout.toString(),
-          ) as unknown
+          return JSON.parse(result.stdout.toString()) as unknown
         }
 
         /*
@@ -196,33 +162,23 @@ export const acceptMatch = sdk.Action.withInput(
          */
         return withSwapEconomicContext(
           () =>
-            requireBlakeEconomicContextReadiness(
-              effects,
-              runJson,
-              {
-                cli:
-                  '/opt/blake-swap/adapters/blake-rpc-cli',
-                wallet: blakeWallet,
-                env: [
-                  `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                  'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-                ],
-              },
-            ),
+            requireBlakeEconomicContextReadiness(effects, runJson, {
+              cli: '/opt/blake-swap/adapters/blake-rpc-cli',
+              wallet: blakeWallet,
+              env: [
+                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
+                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+              ],
+            }),
 
           () =>
-            requireBtcEconomicContextReadiness(
-              effects,
-              runJson,
-              {
-                cli:
-                  '/opt/blake-swap/adapters/btc-rpc-cli',
-                wallet: btcWallet,
-                env: [
-                  'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-                ],
-              },
-            ),
+            requireBtcEconomicContextReadiness(effects, runJson, {
+              cli: '/opt/blake-swap/adapters/btc-rpc-cli',
+              wallet: btcWallet,
+              env: [
+                'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+              ],
+            }),
 
           async () => {
             const command = [
@@ -234,6 +190,7 @@ export const acceptMatch = sdk.Action.withInput(
               'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
               'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
               'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
+              'BLAKE_SWAP_TRANSPORT=nostr',
 
               await getNostrRelayEnv(effects),
 
@@ -265,24 +222,17 @@ export const acceptMatch = sdk.Action.withInput(
 
             const result = await sub.exec(command)
 
-            const stdout =
-              result.stdout.toString().trim()
+            const stdout = result.stdout.toString().trim()
 
-            const stderr =
-              result.stderr.toString().trim()
+            const stderr = result.stderr.toString().trim()
 
             if (result.exitCode !== 0) {
               throw new Error(
-                lastNonemptyLine(stderr) ??
-                  i18n('Match acceptance failed.'),
+                lastNonemptyLine(stderr) ?? i18n('Match acceptance failed.'),
               )
             }
 
-            if (
-              stdout.includes(
-                'NO PENDING MATCH',
-              )
-            ) {
+            if (stdout.includes('NO PENDING MATCH')) {
               return {
                 version: '1',
                 title: i18n('No Pending Match'),
@@ -301,16 +251,10 @@ export const acceptMatch = sdk.Action.withInput(
               }
             }
 
-            if (
-              stdout.includes(
-                'MULTIPLE PENDING MATCHES',
-              )
-            ) {
+            if (stdout.includes('MULTIPLE PENDING MATCHES')) {
               return {
                 version: '1',
-                title: i18n(
-                  'Multiple Pending Matches',
-                ),
+                title: i18n('Multiple Pending Matches'),
                 message: i18n(
                   'More than one valid pending match exists. Enter a match ID prefix to choose explicitly.',
                 ),
@@ -318,8 +262,7 @@ export const acceptMatch = sdk.Action.withInput(
                   type: 'single',
                   name: i18n('Result'),
                   description: null,
-                  value:
-                    pendingMatchesValue(stdout),
+                  value: pendingMatchesValue(stdout),
                   masked: false,
                   copyable: true,
                   qr: false,
@@ -328,30 +271,18 @@ export const acceptMatch = sdk.Action.withInput(
             }
 
             const imported =
-              stdout.includes(
-                'MARKET MATCH IMPORTED',
-              ) ||
-              stdout.includes(
-                'REVERSE MARKET MATCH IMPORTED',
-              ) ||
-              stdout.includes(
-                'MARKET MATCH ALREADY IMPORTED',
-              ) ||
-              stdout.includes(
-                'REVERSE MARKET MATCH ALREADY IMPORTED',
-              )
+              stdout.includes('MARKET MATCH IMPORTED') ||
+              stdout.includes('REVERSE MARKET MATCH IMPORTED') ||
+              stdout.includes('MARKET MATCH ALREADY IMPORTED') ||
+              stdout.includes('REVERSE MARKET MATCH ALREADY IMPORTED')
 
             if (!imported) {
-              throw new Error(
-                i18n('Match acceptance failed.'),
-              )
+              throw new Error(i18n('Match acceptance failed.'))
             }
 
             return {
               version: '1',
-              title: i18n(
-                'Market Match Accepted',
-              ),
+              title: i18n('Market Match Accepted'),
               message: i18n(
                 'The authenticated market match was imported successfully. No funds moved.',
               ),
@@ -359,8 +290,7 @@ export const acceptMatch = sdk.Action.withInput(
                 type: 'single',
                 name: i18n('Result'),
                 description: null,
-                value:
-                  matchResultValue(stdout),
+                value: matchResultValue(stdout),
                 masked: false,
                 copyable: true,
                 qr: false,

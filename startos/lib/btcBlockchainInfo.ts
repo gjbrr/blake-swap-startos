@@ -11,10 +11,7 @@ export type BtcBlockchainInfoResult = {
 
 export class BtcBlockchainInfoError extends Error {
   constructor(
-    readonly code:
-      | 'provider-not-configured'
-      | 'insecure-url'
-      | 'rpc-failed',
+    readonly code: 'provider-not-configured' | 'insecure-url' | 'rpc-failed',
   ) {
     super(code)
   }
@@ -41,7 +38,7 @@ export async function getBtcBlockchainInfo(
       { imageId: 'blake-swap' },
       sdk.Mounts.of(),
       'btc-getblockchaininfo',
-      async sub => {
+      async (sub) => {
         const python = `
 import base64
 import json
@@ -99,16 +96,13 @@ print(json.dumps({
 }))
 `.trim()
 
-        const execResult = await sub.exec(
-          ['python3', '-c', python, rpcUrl],
-          {
-            input: JSON.stringify({
-              username: saved.rpcUsername,
-              password: saved.rpcPassword,
-              trustedCaPem: saved.trustedCaPem,
-            }),
-          },
-        )
+        const execResult = await sub.exec(['python3', '-c', python, rpcUrl], {
+          input: JSON.stringify({
+            username: saved.rpcUsername,
+            password: saved.rpcPassword,
+            trustedCaPem: saved.trustedCaPem,
+          }),
+        })
 
         if (execResult.exitCode !== 0) {
           throw new Error('RPC failed')

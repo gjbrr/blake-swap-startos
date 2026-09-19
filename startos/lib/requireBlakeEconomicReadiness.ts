@@ -2,14 +2,10 @@ import {
   BlakeBlockchainInfoResult,
   getBlakeBlockchainInfo,
 } from './blakeBlockchainInfo'
-import {
-  isBlakeEconomicallyReady,
-} from './blakeReadiness'
+import { isBlakeEconomicallyReady } from './blakeReadiness'
 
 export class BlakeNotEconomicallyReadyError extends Error {
-  constructor(
-    readonly info: BlakeBlockchainInfoResult,
-  ) {
+  constructor(readonly info: BlakeBlockchainInfoResult) {
     super('BLAKE provider is not economically ready')
   }
 }

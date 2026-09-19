@@ -1,40 +1,38 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 
-export const showParticipantIdentity =
-  sdk.Action.withoutInput(
-    'show-participant-identity',
+export const showParticipantIdentity = sdk.Action.withoutInput(
+  'show-participant-identity',
 
-    async () => ({
-      name: i18n('Show Participant Identity'),
-      description: i18n(
-        'Show this BLAKE Swap installation’s public Nostr participant identity.',
-      ),
-      warning: i18n(
-        'Only public identity information is displayed. The private participant key is never returned.',
-      ),
-      allowedStatuses: 'any',
-      group: null,
-      visibility: 'enabled',
-      access: 'user',
-    }),
+  async () => ({
+    name: i18n('Show Participant Identity'),
+    description: i18n(
+      'Show this BLAKE Swap installation’s public Nostr participant identity.',
+    ),
+    warning: i18n(
+      'Only public identity information is displayed. The private participant key is never returned.',
+    ),
+    allowedStatuses: 'any',
+    group: null,
+    visibility: 'enabled',
+    access: 'user',
+  }),
 
-    async ({ effects }) => {
-      const mounts = sdk.Mounts.of().mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: true,
-      })
+  async ({ effects }) => {
+    const mounts = sdk.Mounts.of().mountVolume({
+      volumeId: 'main',
+      subpath: null,
+      mountpoint: '/data',
+      readonly: true,
+    })
 
-      const identity =
-        await sdk.SubContainer.withTemp(
-          effects,
-          { imageId: 'blake-swap' },
-          mounts,
-          'show-participant-identity',
-          async sub => {
-            const script = String.raw`
+    const identity = await sdk.SubContainer.withTemp(
+      effects,
+      { imageId: 'blake-swap' },
+      mounts,
+      'show-participant-identity',
+      async (sub) => {
+        const script = String.raw`
 import json
 from pathlib import Path
 from coincurve import PrivateKey
@@ -132,108 +130,82 @@ print(json.dumps({
 }))
 `
 
-            const result = await sub.exec([
-              'python3',
-              '-c',
-              script,
-            ])
+        const result = await sub.exec(['python3', '-c', script])
 
-            if (result.exitCode !== 0) {
-              const stderr =
-                result.stderr.toString().trim()
+        if (result.exitCode !== 0) {
+          const stderr = result.stderr.toString().trim()
 
-              throw new Error(
-                stderr ||
-                  i18n(
-                    'Participant identity could not be derived.',
-                  ),
-              )
-            }
+          throw new Error(
+            stderr || i18n('Participant identity could not be derived.'),
+          )
+        }
 
-            let parsed: unknown
+        let parsed: unknown
 
-            try {
-              parsed = JSON.parse(
-                result.stdout.toString(),
-              )
-            } catch {
-              throw new Error(
-                i18n(
-                  'Participant identity could not be derived.',
-                ),
-              )
-            }
+        try {
+          parsed = JSON.parse(result.stdout.toString())
+        } catch {
+          throw new Error(i18n('Participant identity could not be derived.'))
+        }
 
-            if (
-              typeof parsed !== 'object' ||
-              parsed === null ||
-              !('hex' in parsed) ||
-              !('npub' in parsed)
-            ) {
-              throw new Error(
-                i18n(
-                  'Participant identity could not be derived.',
-                ),
-              )
-            }
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          !('hex' in parsed) ||
+          !('npub' in parsed)
+        ) {
+          throw new Error(i18n('Participant identity could not be derived.'))
+        }
 
-            const hex =
-              (parsed as { hex: unknown }).hex
+        const hex = (parsed as { hex: unknown }).hex
 
-            const npub =
-              (parsed as { npub: unknown }).npub
+        const npub = (parsed as { npub: unknown }).npub
 
-            if (
-              typeof hex !== 'string' ||
-              !/^[0-9a-f]{64}$/.test(hex) ||
-              typeof npub !== 'string' ||
-              !/^npub1[023456789acdefghjklmnpqrstuvwxyz]+$/.test(
-                npub,
-              )
-            ) {
-              throw new Error(
-                i18n(
-                  'Participant identity could not be derived.',
-                ),
-              )
-            }
+        if (
+          typeof hex !== 'string' ||
+          !/^[0-9a-f]{64}$/.test(hex) ||
+          typeof npub !== 'string' ||
+          !/^npub1[023456789acdefghjklmnpqrstuvwxyz]+$/.test(npub)
+        ) {
+          throw new Error(i18n('Participant identity could not be derived.'))
+        }
 
-            return {
-              hex,
-              npub,
-            }
+        return {
+          hex,
+          npub,
+        }
+      },
+    )
+
+    return {
+      version: '1',
+      title: i18n('Participant Identity'),
+      message: i18n(
+        'This public identity is persistent for this BLAKE Swap installation.',
+      ),
+      result: {
+        type: 'group',
+        value: [
+          {
+            type: 'single',
+            name: i18n('Nostr Public Key (hex)'),
+            description: null,
+            value: identity.hex,
+            masked: false,
+            copyable: true,
+            qr: false,
           },
-        )
-
-      return {
-        version: '1',
-        title: i18n('Participant Identity'),
-        message: i18n(
-          'This public identity is persistent for this BLAKE Swap installation.',
-        ),
-        result: {
-          type: 'group',
-          value: [
-            {
-              type: 'single',
-              name: i18n('Nostr Public Key (hex)'),
-              description: null,
-              value: identity.hex,
-              masked: false,
-              copyable: true,
-              qr: false,
-            },
-            {
-              type: 'single',
-              name: i18n('Nostr Public Key (npub)'),
-              description: null,
-              value: identity.npub,
-              masked: false,
-              copyable: true,
-              qr: true,
-            },
-          ],
-        },
-      }
-    },
-  )
+          {
+            type: 'single',
+            name: i18n('Nostr Public Key (npub)'),
+            description: null,
+            value: identity.npub,
+            masked: false,
+            copyable: true,
+            qr: true,
+          },
+        ],
+      },
+    }
+  },
+)

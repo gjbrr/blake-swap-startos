@@ -73,16 +73,11 @@ for (const test of cases) {
   let threw = false
 
   try {
-    requireWalletObservationEconomicReadiness(
-      'blake',
-      test.observation,
-    )
+    requireWalletObservationEconomicReadiness('blake', test.observation)
   } catch (error) {
     threw = true
 
-    if (
-      !(error instanceof WalletObservationNotEconomicallyReadyError)
-    ) {
+    if (!(error instanceof WalletObservationNotEconomicallyReadyError)) {
       throw error
     }
   }

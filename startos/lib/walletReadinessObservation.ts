@@ -9,8 +9,7 @@ export type WalletReadinessObservation = {
   signing: WalletSigningCapability
 }
 
-export function emptyWalletReadinessObservation():
-  WalletReadinessObservation {
+export function emptyWalletReadinessObservation(): WalletReadinessObservation {
   return {
     wallet: '',
     configured: false,
@@ -31,7 +30,6 @@ export function isObservationEconomicallyReady(
     configured: observation.configured,
     exists: observation.exists,
     loaded: observation.loaded,
-    signingBackendAvailable:
-      observation.signing.signingBackendAvailable,
+    signingBackendAvailable: observation.signing.signingBackendAvailable,
   })
 }

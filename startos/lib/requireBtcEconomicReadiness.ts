@@ -5,9 +5,7 @@ import {
 import { isBtcEconomicallyReady } from './btcReadiness'
 
 export class BtcNotEconomicallyReadyError extends Error {
-  constructor(
-    readonly info: BtcBlockchainInfoResult,
-  ) {
+  constructor(readonly info: BtcBlockchainInfoResult) {
     super('BTC provider is not economically ready')
   }
 }

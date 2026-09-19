@@ -19,14 +19,10 @@ const inputSpec = InputSpec.of({
 })
 
 function extractTakeId(stdout: string): string {
-  const match = stdout.match(
-    /^take id:\s*([0-9a-f]{64})\s*$/im,
-  )
+  const match = stdout.match(/^take id:\s*([0-9a-f]{64})\s*$/im)
 
   if (!match) {
-    throw new Error(
-      'Take command succeeded but no valid take ID was returned',
-    )
+    throw new Error('Take command succeeded but no valid take ID was returned')
   }
 
   return match[1]
@@ -54,14 +50,11 @@ export const takeOffer = sdk.Action.withInput(
   async () => null,
 
   async ({ effects, input }) => {
-    const offerId =
-      input.offerId.trim().toLowerCase()
+    const offerId = input.offerId.trim().toLowerCase()
 
     if (!/^[0-9a-f]{64}$/.test(offerId)) {
       throw new Error(
-        i18n(
-          'Offer ID must be exactly 64 hexadecimal characters.',
-        ),
+        i18n('Offer ID must be exactly 64 hexadecimal characters.'),
       )
     }
 
@@ -76,54 +69,42 @@ export const takeOffer = sdk.Action.withInput(
       readonly: false,
     })
 
-    const result =
-      await sdk.SubContainer.withTemp(
-        effects,
-        { imageId: 'blake-swap' },
-        mounts,
-        'take-offer',
-        async sub =>
-          sub.exec([
-            '/usr/bin/env',
-            'PYTHONPATH=/opt/blake-swap/src',
-            'BLAKE_SWAP_STATE_DIR=/data/swaps',
-            'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
-            'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
-            'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
-            await getNostrRelayEnv(effects),
-            'python3',
-            '/opt/blake-swap/src/swap_v2.py',
-            'take-market-offer',
-            offerId,
-          ]),
-      )
+    const result = await sdk.SubContainer.withTemp(
+      effects,
+      { imageId: 'blake-swap' },
+      mounts,
+      'take-offer',
+      async (sub) =>
+        sub.exec([
+          '/usr/bin/env',
+          'PYTHONPATH=/opt/blake-swap/src',
+          'BLAKE_SWAP_STATE_DIR=/data/swaps',
+          'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
+          'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
+          'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
+          await getNostrRelayEnv(effects),
+          'python3',
+          '/opt/blake-swap/src/swap_v2.py',
+          'take-market-offer',
+          offerId,
+        ]),
+    )
 
-    const stdout =
-      result.stdout.toString().trim()
+    const stdout = result.stdout.toString().trim()
 
-    const stderr =
-      result.stderr.toString().trim()
+    const stderr = result.stderr.toString().trim()
 
     if (result.exitCode !== 0) {
-      throw new Error(
-        stderr ||
-          i18n('Offer take failed.'),
-      )
+      throw new Error(stderr || i18n('Offer take failed.'))
     }
 
-    const newlyTaken = stdout.includes(
-      'MARKET OFFER TAKEN',
-    )
+    const newlyTaken = stdout.includes('MARKET OFFER TAKEN')
 
-    const alreadyTaken = stdout.includes(
-      'MARKET OFFER ALREADY TAKEN',
-    )
+    const alreadyTaken = stdout.includes('MARKET OFFER ALREADY TAKEN')
 
     if (!newlyTaken && !alreadyTaken) {
       throw new Error(
-        i18n(
-          'Take command completed without confirming a signed take.',
-        ),
+        i18n('Take command completed without confirming a signed take.'),
       )
     }
 
@@ -135,9 +116,7 @@ export const takeOffer = sdk.Action.withInput(
         ? i18n('Market Offer Taken')
         : i18n('Existing Market Take Reused'),
       message: newlyTaken
-        ? i18n(
-            'Your signed take request was published successfully.',
-          )
+        ? i18n('Your signed take request was published successfully.')
         : i18n(
             'Your existing signed take request was reused without creating a duplicate.',
           ),

@@ -1,13 +1,11 @@
-import {
-  withRequiredEconomicContext,
-} from './withRequiredEconomicContext'
+import { withRequiredEconomicContext } from './withRequiredEconomicContext'
 
 async function testExecutesAfterReadiness() {
   let executed = false
 
   const result = await withRequiredEconomicContext(
     async () => ({ ready: true }),
-    async context => {
+    async (context) => {
       executed = true
 
       if (context.ready !== true) {
@@ -55,9 +53,7 @@ async function testFailureBlocksExecution() {
   }
 
   if (executed) {
-    throw new Error(
-      'economic callback ran despite readiness failure',
-    )
+    throw new Error('economic callback ran despite readiness failure')
   }
 }
 
@@ -65,9 +61,7 @@ async function main() {
   await testExecutesAfterReadiness()
   await testFailureBlocksExecution()
 
-  console.log(
-    'PASS required economic context execution gate',
-  )
+  console.log('PASS required economic context execution gate')
 }
 
 void main()

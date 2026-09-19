@@ -13,11 +13,7 @@ export type BlakeBlockchainInfoResult = {
 }
 
 export class BlakeBlockchainInfoError extends Error {
-  constructor(
-    readonly code:
-      | 'rpc-unavailable'
-      | 'rpc-failed',
-  ) {
+  constructor(readonly code: 'rpc-unavailable' | 'rpc-failed') {
     super(code)
   }
 }
@@ -35,9 +31,7 @@ export async function getBlakeBlockchainInfo(
     .once()
 
   if (!rpcAddr) {
-    throw new BlakeBlockchainInfoError(
-      'rpc-unavailable',
-    )
+    throw new BlakeBlockchainInfoError('rpc-unavailable')
   }
 
   const mounts = sdk.Mounts.of().mountDependency({
@@ -54,7 +48,7 @@ export async function getBlakeBlockchainInfo(
       { imageId: 'blake-swap' },
       mounts,
       'blake-getblockchaininfo',
-      async sub => {
+      async (sub) => {
         const python = `
 import base64
 import json
@@ -107,12 +101,7 @@ print(json.dumps({
 }))
 `.trim()
 
-        const execResult = await sub.exec([
-          'python3',
-          '-c',
-          python,
-          rpcAddr,
-        ])
+        const execResult = await sub.exec(['python3', '-c', python, rpcAddr])
 
         if (execResult.exitCode !== 0) {
           throw new Error('RPC failed')
@@ -124,8 +113,6 @@ print(json.dumps({
       },
     )
   } catch {
-    throw new BlakeBlockchainInfoError(
-      'rpc-failed',
-    )
+    throw new BlakeBlockchainInfoError('rpc-failed')
   }
 }

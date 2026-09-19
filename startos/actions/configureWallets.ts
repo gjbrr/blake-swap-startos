@@ -62,9 +62,7 @@ export const configureWallets = sdk.Action.withInput(
     const btcWallet = input.btcWallet?.trim() ?? ''
 
     const configDir = sdk.volumes.main.subpath('config')
-    const configPath = sdk.volumes.main.subpath(
-      'config/wallets.json',
-    )
+    const configPath = sdk.volumes.main.subpath('config/wallets.json')
 
     await fs.mkdir(configDir, {
       recursive: true,

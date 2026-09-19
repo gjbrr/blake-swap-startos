@@ -1,24 +1,12 @@
 import { sdk } from '../sdk'
 import { i18n } from '../i18n'
 import { walletMapping } from '../file-models/walletMapping'
-import {
-  getBlakeBlockchainInfo,
-} from '../lib/blakeBlockchainInfo'
-import {
-  getBtcBlockchainInfo,
-} from '../lib/btcBlockchainInfo'
-import {
-  isBlakeEconomicallyReady,
-} from '../lib/blakeReadiness'
-import {
-  isBtcEconomicallyReady,
-} from '../lib/btcReadiness'
-import {
-  observeWalletReadiness,
-} from '../lib/observeWalletReadiness'
-import {
-  isObservationEconomicallyReady,
-} from '../lib/walletReadinessObservation'
+import { getBlakeBlockchainInfo } from '../lib/blakeBlockchainInfo'
+import { getBtcBlockchainInfo } from '../lib/btcBlockchainInfo'
+import { isBlakeEconomicallyReady } from '../lib/blakeReadiness'
+import { isBtcEconomicallyReady } from '../lib/btcReadiness'
+import { observeWalletReadiness } from '../lib/observeWalletReadiness'
+import { isObservationEconomicallyReady } from '../lib/walletReadinessObservation'
 
 const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
 const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
@@ -40,20 +28,15 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
   }),
 
   async ({ effects }) => {
-    const savedMapping =
-      await walletMapping.read().const(effects)
+    const savedMapping = await walletMapping.read().const(effects)
 
-    const blakeWallet =
-      savedMapping?.blakeWallet.trim() ?? ''
+    const blakeWallet = savedMapping?.blakeWallet.trim() ?? ''
 
-    const btcWallet =
-      savedMapping?.btcWallet.trim() ?? ''
+    const btcWallet = savedMapping?.btcWallet.trim() ?? ''
 
-    const blakeBlockchain =
-      await getBlakeBlockchainInfo(effects)
+    const blakeBlockchain = await getBlakeBlockchainInfo(effects)
 
-    const btcBlockchain =
-      await getBtcBlockchainInfo(effects)
+    const btcBlockchain = await getBtcBlockchainInfo(effects)
 
     const blakeRpcAddr = await sdk.host
       .getBridgeAddress(effects, {
@@ -65,9 +48,7 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
       .once()
 
     if (!blakeRpcAddr) {
-      throw new Error(
-        i18n('BLAKE RPC is unavailable.'),
-      )
+      throw new Error(i18n('BLAKE RPC is unavailable.'))
     }
 
     const mounts = sdk.Mounts.of()
@@ -90,46 +71,35 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
       { imageId: 'blake-swap' },
       mounts,
       'check-economic-readiness',
-      async sub => {
-        async function runJson(
-          command: string[],
-        ): Promise<unknown> {
+      async (sub) => {
+        async function runJson(command: string[]): Promise<unknown> {
           const result = await sub.exec(command)
 
           if (result.exitCode !== 0) {
             throw new Error(
-              result.stderr.toString().trim() ||
-                'wallet RPC failed',
+              result.stderr.toString().trim() || 'wallet RPC failed',
             )
           }
 
-          return JSON.parse(
-            result.stdout.toString(),
-          ) as unknown
+          return JSON.parse(result.stdout.toString()) as unknown
         }
 
-        const blake = await observeWalletReadiness(
-          runJson,
-          {
-            cli: '/opt/blake-swap/adapters/blake-rpc-cli',
-            wallet: blakeWallet,
-            env: [
-              `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-              'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-            ],
-          },
-        )
+        const blake = await observeWalletReadiness(runJson, {
+          cli: '/opt/blake-swap/adapters/blake-rpc-cli',
+          wallet: blakeWallet,
+          env: [
+            `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
+            'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+          ],
+        })
 
-        const btc = await observeWalletReadiness(
-          runJson,
-          {
-            cli: '/opt/blake-swap/adapters/btc-rpc-cli',
-            wallet: btcWallet,
-            env: [
-              'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-            ],
-          },
-        )
+        const btc = await observeWalletReadiness(runJson, {
+          cli: '/opt/blake-swap/adapters/btc-rpc-cli',
+          wallet: btcWallet,
+          env: [
+            'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+          ],
+        })
 
         return {
           blake,
@@ -138,17 +108,13 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
       },
     )
 
-    const blakeChainReady =
-      isBlakeEconomicallyReady(blakeBlockchain)
+    const blakeChainReady = isBlakeEconomicallyReady(blakeBlockchain)
 
-    const btcChainReady =
-      isBtcEconomicallyReady(btcBlockchain)
+    const btcChainReady = isBtcEconomicallyReady(btcBlockchain)
 
-    const blakeWalletReady =
-      isObservationEconomicallyReady(wallets.blake)
+    const blakeWalletReady = isObservationEconomicallyReady(wallets.blake)
 
-    const btcWalletReady =
-      isObservationEconomicallyReady(wallets.btc)
+    const btcWalletReady = isObservationEconomicallyReady(wallets.btc)
 
     const readinessValue = (ready: boolean) =>
       ready ? i18n('Ready') : i18n('Not Ready')
@@ -156,9 +122,7 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
     return {
       version: '1',
       title: i18n('Economic Preflight'),
-      message: i18n(
-        'Economic readiness check completed successfully.',
-      ),
+      message: i18n('Economic readiness check completed successfully.'),
       result: {
         type: 'group',
         value: [
@@ -184,9 +148,7 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
             type: 'single',
             name: i18n('BLAKE Economic Context'),
             description: null,
-            value: readinessValue(
-              blakeChainReady && blakeWalletReady,
-            ),
+            value: readinessValue(blakeChainReady && blakeWalletReady),
             masked: false,
             copyable: false,
             qr: false,
@@ -213,9 +175,7 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
             type: 'single',
             name: i18n('BTC Economic Context'),
             description: null,
-            value: readinessValue(
-              btcChainReady && btcWalletReady,
-            ),
+            value: readinessValue(btcChainReady && btcWalletReady),
             masked: false,
             copyable: false,
             qr: false,

@@ -19,9 +19,7 @@ const inputSpec = InputSpec.of({
 })
 
 function extractCancelId(stdout: string): string {
-  const match = stdout.match(
-    /^cancel id:\s*([0-9a-f]{64})\s*$/im,
-  )
+  const match = stdout.match(/^cancel id:\s*([0-9a-f]{64})\s*$/im)
 
   if (!match) {
     throw new Error(
@@ -58,9 +56,7 @@ export const cancelOffer = sdk.Action.withInput(
 
     if (!/^[0-9a-f]{64}$/.test(offerId)) {
       throw new Error(
-        i18n(
-          'Offer ID must be exactly 64 hexadecimal characters.',
-        ),
+        i18n('Offer ID must be exactly 64 hexadecimal characters.'),
       )
     }
 
@@ -75,55 +71,42 @@ export const cancelOffer = sdk.Action.withInput(
       readonly: false,
     })
 
-    const result =
-      await sdk.SubContainer.withTemp(
-        effects,
-        { imageId: 'blake-swap' },
-        mounts,
-        'cancel-offer',
-        async sub =>
-          sub.exec([
-            '/usr/bin/env',
-            'PYTHONPATH=/opt/blake-swap/src',
-            'BLAKE_SWAP_STATE_DIR=/data/swaps',
-            'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
-            'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
-            'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
-            await getNostrRelayEnv(effects),
-            'python3',
-            '/opt/blake-swap/src/swap_v2.py',
-            'cancel-market-offer',
-            offerId,
-          ]),
-      )
+    const result = await sdk.SubContainer.withTemp(
+      effects,
+      { imageId: 'blake-swap' },
+      mounts,
+      'cancel-offer',
+      async (sub) =>
+        sub.exec([
+          '/usr/bin/env',
+          'PYTHONPATH=/opt/blake-swap/src',
+          'BLAKE_SWAP_STATE_DIR=/data/swaps',
+          'BLAKE_SWAP_MESSAGE_DIR=/data/messages',
+          'BLAKE_SWAP_NOSTR_KEY_DIR=/data/nostr',
+          'BLAKE_SWAP_PARTICIPANT_KEY_FILE=/data/participant.key',
+          await getNostrRelayEnv(effects),
+          'python3',
+          '/opt/blake-swap/src/swap_v2.py',
+          'cancel-market-offer',
+          offerId,
+        ]),
+    )
 
-    const stdout =
-      result.stdout.toString().trim()
+    const stdout = result.stdout.toString().trim()
 
-    const stderr =
-      result.stderr.toString().trim()
+    const stderr = result.stderr.toString().trim()
 
     if (result.exitCode !== 0) {
+      throw new Error(stderr || i18n('Offer cancellation failed.'))
+    }
+
+    if (!stdout.includes('MARKET OFFER CANCELLED')) {
       throw new Error(
-        stderr ||
-          i18n('Offer cancellation failed.'),
+        i18n('Offer command completed without confirming cancellation.'),
       )
     }
 
-    if (
-      !stdout.includes(
-        'MARKET OFFER CANCELLED',
-      )
-    ) {
-      throw new Error(
-        i18n(
-          'Offer command completed without confirming cancellation.',
-        ),
-      )
-    }
-
-    const cancelId =
-      extractCancelId(stdout)
+    const cancelId = extractCancelId(stdout)
 
     return {
       version: '1',

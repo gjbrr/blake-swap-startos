@@ -30,11 +30,9 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
   async ({ effects }) => {
     const savedMapping = await walletMapping.read().const(effects)
 
-    const blakeWallet =
-      savedMapping?.blakeWallet.trim() ?? ''
+    const blakeWallet = savedMapping?.blakeWallet.trim() ?? ''
 
-    const btcWallet =
-      savedMapping?.btcWallet.trim() ?? ''
+    const btcWallet = savedMapping?.btcWallet.trim() ?? ''
 
     let blakeRpcAddr: string | null = null
 
@@ -54,8 +52,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
     }
 
     if (btcWallet) {
-      const savedBtcProvider =
-        await btcProvider.read().const(effects)
+      const savedBtcProvider = await btcProvider.read().const(effects)
 
       if (!savedBtcProvider) {
         throw new Error(
@@ -84,48 +81,37 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
       { imageId: 'blake-swap' },
       mounts,
       'check-wallet-readiness',
-      async sub => {
-        async function runJson(
-          command: string[],
-        ): Promise<unknown> {
+      async (sub) => {
+        async function runJson(command: string[]): Promise<unknown> {
           const result = await sub.exec(command)
 
           if (result.exitCode !== 0) {
             throw new Error(
-              result.stderr.toString().trim() ||
-                'wallet RPC failed',
+              result.stderr.toString().trim() || 'wallet RPC failed',
             )
           }
 
-          return JSON.parse(
-            result.stdout.toString(),
-          ) as unknown
+          return JSON.parse(result.stdout.toString()) as unknown
         }
 
-        const blake = await observeWalletReadiness(
-          runJson,
-          {
-            cli: '/opt/blake-swap/adapters/blake-rpc-cli',
-            wallet: blakeWallet,
-            env: blakeRpcAddr
-              ? [
-                  `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                  'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-                ]
-              : [],
-          },
-        )
+        const blake = await observeWalletReadiness(runJson, {
+          cli: '/opt/blake-swap/adapters/blake-rpc-cli',
+          wallet: blakeWallet,
+          env: blakeRpcAddr
+            ? [
+                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
+                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+              ]
+            : [],
+        })
 
-        const btc = await observeWalletReadiness(
-          runJson,
-          {
-            cli: '/opt/blake-swap/adapters/btc-rpc-cli',
-            wallet: btcWallet,
-            env: [
-              'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-            ],
-          },
-        )
+        const btc = await observeWalletReadiness(runJson, {
+          cli: '/opt/blake-swap/adapters/btc-rpc-cli',
+          wallet: btcWallet,
+          env: [
+            'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+          ],
+        })
 
         return {
           blake,
@@ -134,9 +120,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
       },
     )
 
-    function displayCapability(
-      value: boolean | null,
-    ): string {
+    function displayCapability(value: boolean | null): string {
       if (value === null) {
         return i18n('Unknown')
       }
@@ -144,10 +128,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
       return String(value)
     }
 
-    function fields(
-      label: string,
-      observation: WalletReadinessObservation,
-    ) {
+    function fields(label: string, observation: WalletReadinessObservation) {
       return [
         {
           type: 'single' as const,
@@ -189,9 +170,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           type: 'single' as const,
           name: `${label} — ${i18n('Private Keys Enabled')}`,
           description: null,
-          value: displayCapability(
-            observation.signing.privateKeysEnabled,
-          ),
+          value: displayCapability(observation.signing.privateKeysEnabled),
           masked: false,
           copyable: false,
           qr: false,
@@ -200,9 +179,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           type: 'single' as const,
           name: `${label} — ${i18n('External Signer')}`,
           description: null,
-          value: displayCapability(
-            observation.signing.externalSigner,
-          ),
+          value: displayCapability(observation.signing.externalSigner),
           masked: false,
           copyable: false,
           qr: false,
@@ -211,9 +188,7 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
           type: 'single' as const,
           name: `${label} — ${i18n('Signing Backend Available')}`,
           description: null,
-          value: displayCapability(
-            observation.signing.signingBackendAvailable,
-          ),
+          value: displayCapability(observation.signing.signingBackendAvailable),
           masked: false,
           copyable: false,
           qr: false,
@@ -235,20 +210,12 @@ export const checkWalletReadiness = sdk.Action.withoutInput(
     return {
       version: '1',
       title: i18n('Wallet Readiness'),
-      message: i18n(
-        'Wallet readiness check completed successfully.',
-      ),
+      message: i18n('Wallet readiness check completed successfully.'),
       result: {
         type: 'group',
         value: [
-          ...fields(
-            i18n('BLAKE Wallet'),
-            observations.blake,
-          ),
-          ...fields(
-            i18n('Bitcoin Wallet'),
-            observations.btc,
-          ),
+          ...fields(i18n('BLAKE Wallet'), observations.blake),
+          ...fields(i18n('Bitcoin Wallet'), observations.btc),
         ],
       },
     }

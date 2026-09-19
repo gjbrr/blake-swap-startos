@@ -32,7 +32,7 @@ export const walletMapping = FileHelper.raw<WalletMapping>(
     base: sdk.volumes.main,
     subpath: 'config/wallets.json',
   },
-  data => `${JSON.stringify(data, null, 2)}\n`,
-  raw => JSON.parse(raw),
+  (data) => `${JSON.stringify(data, null, 2)}\n`,
+  (raw) => JSON.parse(raw),
   validateWalletMapping,
 )

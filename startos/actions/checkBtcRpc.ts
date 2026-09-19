@@ -42,8 +42,7 @@ export const checkBtcRpc = sdk.Action.withoutInput(
       throw new Error(i18n('BTC RPC check failed.'))
     }
 
-    const economicallyReady =
-      isBtcEconomicallyReady(result)
+    const economicallyReady = isBtcEconomicallyReady(result)
 
     return {
       version: '1',
@@ -101,9 +100,7 @@ export const checkBtcRpc = sdk.Action.withoutInput(
             type: 'single',
             name: i18n('Economic Readiness'),
             description: null,
-            value: economicallyReady
-              ? i18n('Ready')
-              : i18n('Not Ready'),
+            value: economicallyReady ? i18n('Ready') : i18n('Not Ready'),
             masked: false,
             copyable: false,
             qr: false,

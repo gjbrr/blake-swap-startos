@@ -30,22 +30,16 @@ export const checkBlakeRpc = sdk.Action.withoutInput(
         error instanceof BlakeBlockchainInfoError &&
         error.code === 'rpc-unavailable'
       ) {
-        throw new Error(
-          i18n('BLAKE RPC is unavailable.'),
-        )
+        throw new Error(i18n('BLAKE RPC is unavailable.'))
       }
 
-      throw new Error(
-        i18n('BLAKE RPC check failed.'),
-      )
+      throw new Error(i18n('BLAKE RPC check failed.'))
     }
 
     return {
       version: '1',
       title: i18n('BLAKE RPC'),
-      message: i18n(
-        'BLAKE RPC check completed successfully.',
-      ),
+      message: i18n('BLAKE RPC check completed successfully.'),
       result: {
         type: 'group',
         value: [

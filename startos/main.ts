@@ -1,17 +1,19 @@
 import { sdk } from './sdk'
 import { walletMapping } from './file-models/walletMapping'
+import { btcFeePolicy } from './file-models/btcFeePolicy'
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.info('Starting BLAKE Swap alpha service')
 
-  const savedWalletMapping =
-    await walletMapping.read().const(effects)
+  const savedWalletMapping = await walletMapping.read().const(effects)
 
-  const blakeWallet =
-    savedWalletMapping?.blakeWallet.trim() ?? ''
+  const blakeWallet = savedWalletMapping?.blakeWallet.trim() ?? ''
 
-  const btcWallet =
-    savedWalletMapping?.btcWallet.trim() ?? ''
+  const btcWallet = savedWalletMapping?.btcWallet.trim() ?? ''
+
+  const savedBtcFeePolicy = await btcFeePolicy.read().const(effects)
+
+  const btcFeeRateSatVb = savedBtcFeePolicy?.feeRateSatVb?.trim() ?? ''
 
   if (!blakeWallet || !btcWallet) {
     throw new Error(
@@ -108,11 +110,7 @@ except Exception as exc:
     // available inside StartOS.  It does NOT run next, run, fund, resume,
     // wallet RPC, blockchain RPC, or Nostr coordination automatically.
     exec: {
-      command: [
-        'python3',
-        '-c',
-        'import time; time.sleep(1000000000)',
-      ],
+      command: ['python3', '-c', 'import time; time.sleep(1000000000)'],
       env: {
         PYTHONPATH: '/opt/blake-swap/src',
         BLAKE_SWAP_STATE_DIR: '/data/swaps',
@@ -121,10 +119,8 @@ except Exception as exc:
         BLAKE_SWAP_PARTICIPANT_KEY_FILE: '/data/participant.key',
 
         // Private RPC adapters used only by the packaged swap engine.
-        BLAKE_SWAP_BLAKE_CLI:
-          '/opt/blake-swap/adapters/blake-rpc-cli',
-        BLAKE_SWAP_BTC_CLI:
-          '/opt/blake-swap/adapters/btc-rpc-cli',
+        BLAKE_SWAP_BLAKE_CLI: '/opt/blake-swap/adapters/blake-rpc-cli',
+        BLAKE_SWAP_BTC_CLI: '/opt/blake-swap/adapters/btc-rpc-cli',
 
         // The adapters provide transport configuration, so the engine
         // must not add host filesystem datadir arguments.
@@ -137,17 +133,19 @@ except Exception as exc:
 
         // BLAKE uses StartOS's dynamic internal bridge + dependency
         // cookie. BTC credentials remain solely in /data/config.
-        BLAKE_SWAP_BLAKE_RPC_URL:
-          `http://${blakeRpcAddr}/`,
-        BLAKE_SWAP_BLAKE_COOKIE_PATH:
-          '/mnt/bitcoind/.cookie',
-        BLAKE_SWAP_BTC_PROVIDER_CONFIG:
-          '/data/config/btc-provider.json',
+        BLAKE_SWAP_BLAKE_RPC_URL: `http://${blakeRpcAddr}/`,
+        BLAKE_SWAP_BLAKE_COOKIE_PATH: '/mnt/bitcoind/.cookie',
+        BLAKE_SWAP_BTC_PROVIDER_CONFIG: '/data/config/btc-provider.json',
 
         // Never permit the packaged engine to fall back to its legacy
         // participant-role wallet defaults in production.
         BLAKE_SWAP_BLAKE_WALLET: blakeWallet,
         BLAKE_SWAP_BTC_WALLET: btcWallet,
+        ...(btcFeeRateSatVb
+          ? {
+              BLAKE_SWAP_BTC_SPEND_FEE_RATE_SAT_VB: btcFeeRateSatVb,
+            }
+          : {}),
       },
     },
 
