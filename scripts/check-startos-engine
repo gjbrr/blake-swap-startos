@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CANONICAL="${BLAKE_SWAP_CANONICAL:-$HOME/blake-swap}"
+VENDOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upstream-project"
+
+SRC_FILES=(
+    swap_v2.py
+    swap_agent.py
+    swap_timeout_policy.py
+    swap_wire.py
+    fee_policy.py
+    install_reconcile.py
+)
+
+TOP_FILES=(
+    requirements.txt
+)
+
+SCRIPT_FILES=(
+    blake
+    blake-swap
+)
+
+failed=0
+
+check_file() {
+    local rel="$1"
+
+    if [[ ! -f "$CANONICAL/$rel" ]]; then
+        echo "MISSING CANONICAL  $rel"
+        failed=1
+        return
+    fi
+
+    if [[ ! -f "$VENDOR/$rel" ]]; then
+        echo "MISSING VENDOR     $rel"
+        failed=1
+        return
+    fi
+
+    if ! cmp -s "$CANONICAL/$rel" "$VENDOR/$rel"; then
+        echo "DRIFT CONTENT      $rel"
+        failed=1
+        return
+    fi
+
+    canonical_exec=0
+    vendor_exec=0
+
+    [[ -x "$CANONICAL/$rel" ]] && canonical_exec=1
+    [[ -x "$VENDOR/$rel" ]] && vendor_exec=1
+
+    if [[ "$canonical_exec" != "$vendor_exec" ]]; then
+        echo "DRIFT MODE         $rel"
+        failed=1
+        return
+    fi
+
+    echo "OK                 $rel"
+}
+
+printf '%s\n' "Checking StartOS vendored engine against canonical"
+printf '  canonical: %s\n' "$CANONICAL"
+printf '  vendor:    %s\n' "$VENDOR"
+printf '\n'
+
+for f in "${SRC_FILES[@]}"; do
+    check_file "src/$f"
+done
+
+for f in "${TOP_FILES[@]}"; do
+    check_file "$f"
+done
+
+for f in "${SCRIPT_FILES[@]}"; do
+    check_file "scripts/$f"
+done
+
+printf '\n%s\n' "Checking canonical live tests..."
+
+canonical_tests="$(
+    find "$CANONICAL/tests" \
+        -maxdepth 1 \
+        -type f \
+        -name '*.py' \
+        -printf '%f\n' \
+        | sort
+)"
+
+vendor_tests="$(
+    find "$VENDOR/tests" \
+        -maxdepth 1 \
+        -type f \
+        -name '*.py' \
+        -printf '%f\n' \
+        | sort
+)"
+
+if [[ "$canonical_tests" != "$vendor_tests" ]]; then
+    echo "DRIFT              tests/*.py inventory"
+    diff -u \
+        <(printf '%s\n' "$canonical_tests") \
+        <(printf '%s\n' "$vendor_tests") \
+        || true
+    failed=1
+else
+    echo "OK                 tests/*.py inventory"
+fi
+
+while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    check_file "tests/$name"
+done <<< "$canonical_tests"
+
+printf '\n'
+
+if (( failed )); then
+    echo "FAIL: StartOS vendored engine differs from canonical." >&2
+    exit 1
+fi
+
+echo "PASS: StartOS vendored engine exactly matches canonical managed files."

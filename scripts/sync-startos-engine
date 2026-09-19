@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CANONICAL="${BLAKE_SWAP_CANONICAL:-$HOME/blake-swap}"
+VENDOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/upstream-project"
+
+SRC_FILES=(
+    swap_v2.py
+    swap_agent.py
+    swap_timeout_policy.py
+    swap_wire.py
+    fee_policy.py
+    install_reconcile.py
+)
+
+TOP_FILES=(
+    requirements.txt
+)
+
+SCRIPT_FILES=(
+    blake
+    blake-swap
+)
+
+printf '%s\n' "Syncing canonical BLAKE Swap engine"
+printf '  from: %s\n' "$CANONICAL"
+printf '  to:   %s\n' "$VENDOR"
+printf '\n'
+
+for f in "${SRC_FILES[@]}"; do
+    test -f "$CANONICAL/src/$f" || {
+        echo "ERROR: canonical source missing: src/$f" >&2
+        exit 1
+    }
+
+    cp -p \
+        "$CANONICAL/src/$f" \
+        "$VENDOR/src/$f"
+
+    echo "SYNC  src/$f"
+done
+
+for f in "${TOP_FILES[@]}"; do
+    test -f "$CANONICAL/$f" || {
+        echo "ERROR: canonical file missing: $f" >&2
+        exit 1
+    }
+
+    cp -p \
+        "$CANONICAL/$f" \
+        "$VENDOR/$f"
+
+    echo "SYNC  $f"
+done
+
+for f in "${SCRIPT_FILES[@]}"; do
+    test -f "$CANONICAL/scripts/$f" || {
+        echo "ERROR: canonical script missing: scripts/$f" >&2
+        exit 1
+    }
+
+    cp -p \
+        "$CANONICAL/scripts/$f" \
+        "$VENDOR/scripts/$f"
+
+    echo "SYNC  scripts/$f"
+done
+
+# Tests are a mechanically vendored snapshot of canonical live *.py tests.
+# Backup files such as *.py.before-* do not match this glob.
+while IFS= read -r -d '' src; do
+    name="$(basename "$src")"
+
+    cp -p \
+        "$src" \
+        "$VENDOR/tests/$name"
+
+    echo "SYNC  tests/$name"
+done < <(
+    find "$CANONICAL/tests" \
+        -maxdepth 1 \
+        -type f \
+        -name '*.py' \
+        -print0 \
+        | sort -z
+)
+
+printf '\n%s\n' "PASS: canonical engine copied into StartOS vendor tree"
+printf '%s\n' "NOTE: no StartOS package files or backup files were modified."

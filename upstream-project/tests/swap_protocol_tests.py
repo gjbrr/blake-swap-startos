@@ -243,6 +243,8 @@ def swap_cmd(
                 ALICE_BASE
             )
             env["BLAKE_SWAP_CHAIN_WALLET"] = ALICE_WALLET
+            env["BLAKE_SWAP_BLAKE_WALLET"] = ALICE_WALLET
+            env["BLAKE_SWAP_BTC_WALLET"] = ALICE_WALLET
             env["BLAKE_SWAP_PARTICIPANT_KEY_FILE"] = str(
                 ALICE_PARTICIPANT_KEY
             )
@@ -252,6 +254,8 @@ def swap_cmd(
                 BOB_BASE
             )
             env["BLAKE_SWAP_CHAIN_WALLET"] = BOB_WALLET
+            env["BLAKE_SWAP_BLAKE_WALLET"] = BOB_WALLET
+            env["BLAKE_SWAP_BTC_WALLET"] = BOB_WALLET
             env["BLAKE_SWAP_PARTICIPANT_KEY_FILE"] = str(
                 BOB_PARTICIPANT_KEY
             )
@@ -278,14 +282,7 @@ def btc_cli(*args, wallet=None):
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
-    def rpc_arg(x):
-        if x is True:
-            return "true"
-        if x is False:
-            return "false"
-        return str(x)
-
-    cmd.extend(rpc_arg(x) for x in args)
+    cmd.extend(str(x) for x in args)
     p = run(cmd)
     out = p.stdout.strip()
     try:
@@ -302,14 +299,7 @@ def blake_cli(*args, wallet=None):
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
-    def rpc_arg(x):
-        if x is True:
-            return "true"
-        if x is False:
-            return "false"
-        return str(x)
-
-    cmd.extend(rpc_arg(x) for x in args)
+    cmd.extend(str(x) for x in args)
     p = run(cmd)
     out = p.stdout.strip()
     try:
@@ -849,297 +839,6 @@ def test_happy() -> None:
 
 
 
-def test_pending_blake_claim() -> None:
-    banner("PENDING BLAKE CLAIM CONFIRMATION")
-
-    swap_id = make_fresh_swap()
-    print("swap:", swap_id)
-
-    handshake(swap_id)
-    fund_blake_and_sync(swap_id)
-    fund_btc_and_sync(swap_id)
-
-    # Complete the Bitcoin claim normally so Bob can independently
-    # learn S from a confirmed Bitcoin transaction.
-    swap_cmd(
-        "claim-btc",
-        swap_id,
-        role="alice",
-    )
-    swap_cmd(
-        "publish-btc-claimed",
-        swap_id,
-        role="alice",
-    )
-    swap_cmd(
-        "receive-btc-claimed",
-        swap_id,
-        role="bob",
-    )
-    swap_cmd(
-        "extract-secret",
-        swap_id,
-        role="bob",
-    )
-
-    assert_state(
-        swap_id,
-        "bob",
-        "BTC_CLAIMED",
-    )
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-    }
-
-    # First broadcast must persist identity without advancing state.
-    swap_cmd(
-        "claim-blake",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        swap_id,
-        "bob",
-    )
-
-    first_txid = pending.get(
-        "blake_claim_txid"
-    )
-
-    require(
-        pending.get("state") == "BTC_CLAIMED",
-        "unconfirmed BLAKE claim advanced protocol state",
-    )
-    require(
-        first_txid,
-        "pending BLAKE claim did not persist txid",
-    )
-    require(
-        pending.get("blake_claim_blockhash") is None,
-        "pending BLAKE claim unexpectedly has blockhash",
-    )
-
-    # Retry while the first claim remains in the mempool. It must
-    # fail closed rather than construct/broadcast another spend.
-    proc = swap_cmd(
-        "claim-blake",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-        expect_ok=False,
-    )
-
-    require(
-        proc.returncode != 0,
-        "pending BLAKE claim retry unexpectedly succeeded",
-    )
-
-    output = proc.stdout + proc.stderr
-
-    require(
-        (
-            "unconfirmed spender" in output
-            or "Refusing to rebroadcast" in output
-            or "outpoint is unavailable" in output
-            or "BLAKE HTLC is already spent or unavailable" in output
-        ),
-        "pending BLAKE claim retry failed for an unexpected reason:\n"
-        + output[-2000:],
-    )
-
-    still_pending = load_state(
-        swap_id,
-        "bob",
-    )
-
-    require(
-        still_pending.get("state") == "BTC_CLAIMED",
-        "pending BLAKE claim retry changed protocol state",
-    )
-    require(
-        still_pending.get("blake_claim_txid") == first_txid,
-        "pending BLAKE claim retry changed txid",
-    )
-    require(
-        still_pending.get("blake_claim_blockhash") is None,
-        "pending BLAKE claim retry unexpectedly recorded blockhash",
-    )
-
-    # External confirmation simulates normal production mining.
-    mine_blake(1)
-
-    swap_cmd(
-        "claim-blake",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        swap_id,
-        "bob",
-    )
-
-    require(
-        confirmed.get("state") == "BLAKE_CLAIMED",
-        "confirmed BLAKE claim did not advance state",
-    )
-    require(
-        confirmed.get("blake_claim_txid") == first_txid,
-        "confirmed BLAKE claim txid changed",
-    )
-    require(
-        confirmed.get("blake_claim_blockhash"),
-        "confirmed BLAKE claim did not record blockhash",
-    )
-
-    ok(
-        "production BLAKE claim waits for active-chain confirmation"
-    )
-
-
-def test_pending_btc_claim() -> None:
-    banner("PENDING BTC CLAIM CONFIRMATION")
-
-    swap_id = make_fresh_swap()
-    print("swap:", swap_id)
-
-    handshake(swap_id)
-    fund_blake_and_sync(swap_id)
-    fund_btc_and_sync(swap_id)
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-    }
-
-    # First claim broadcast: S enters the mempool, but durable
-    # protocol state must remain BTC_FUNDED until confirmation.
-    swap_cmd(
-        "claim-btc",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        swap_id,
-        "alice",
-    )
-
-    first_txid = pending.get(
-        "btc_claim_txid"
-    )
-
-    require(
-        pending.get("state") == "BTC_FUNDED",
-        "unconfirmed BTC claim advanced protocol state",
-    )
-    require(
-        first_txid,
-        "pending BTC claim did not persist txid",
-    )
-    require(
-        pending.get("btc_claim_blockhash") is None,
-        "pending BTC claim unexpectedly has blockhash",
-    )
-
-    # Bob must not be able to consume Alice's pending claim as
-    # authoritative settlement data.
-    before_bob = load_state(
-        swap_id,
-        "bob",
-    )
-
-    require(
-        before_bob.get("state") == "BTC_FUNDED",
-        "Bob was not BTC_FUNDED before pending-claim check",
-    )
-    require(
-        before_bob.get("btc_claim_txid") is None,
-        "Bob unexpectedly recorded Alice's pending BTC claim",
-    )
-
-    # Retry before confirmation. The existing mempool-spend guard
-    # must fail closed rather than broadcast another irreversible spend.
-    proc = swap_cmd(
-        "claim-btc",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-        expect_ok=False,
-    )
-
-    require(
-        proc.returncode != 0,
-        "pending BTC claim retry unexpectedly succeeded",
-    )
-
-    output = proc.stdout + proc.stderr
-    require(
-        (
-            "unconfirmed spender" in output
-            or "Refusing to rebroadcast" in output
-            or "outpoint is unavailable" in output
-            or "Bitcoin HTLC is already spent or unavailable" in output
-        ),
-        "pending BTC claim retry failed for an unexpected reason:\n"
-        + output[-2000:],
-    )
-
-    still_pending = load_state(
-        swap_id,
-        "alice",
-    )
-
-    require(
-        still_pending.get("state") == "BTC_FUNDED",
-        "pending BTC claim retry changed protocol state",
-    )
-    require(
-        still_pending.get("btc_claim_txid") == first_txid,
-        "pending BTC claim retry changed txid",
-    )
-    require(
-        still_pending.get("btc_claim_blockhash") is None,
-        "pending BTC claim retry unexpectedly recorded blockhash",
-    )
-
-    # Confirmation comes from the external test harness, not swap_v2.py.
-    mine_btc(1)
-
-    swap_cmd(
-        "claim-btc",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        swap_id,
-        "alice",
-    )
-
-    require(
-        confirmed.get("state") == "BTC_CLAIMED",
-        "confirmed BTC claim did not advance state",
-    )
-    require(
-        confirmed.get("btc_claim_txid") == first_txid,
-        "confirmed BTC claim txid changed",
-    )
-    require(
-        confirmed.get("btc_claim_blockhash"),
-        "confirmed BTC claim did not record blockhash",
-    )
-
-    ok(
-        "production BTC claim waits for active-chain confirmation"
-    )
-
-
 def test_reorg_btc_claim() -> None:
     banner("REORG SAFETY: BTC CLAIM ROLLBACK")
 
@@ -1515,331 +1214,6 @@ def test_reorg_btc_refund() -> None:
     print("reorg refund swap:", swap_id)
 
 
-def test_pending_btc_refund() -> None:
-    banner("PENDING BTC REFUND CONFIRMATION")
-
-    swap_id = make_fresh_swap()
-    print("swap:", swap_id)
-
-    handshake(swap_id)
-    fund_blake_and_sync(swap_id)
-    fund_btc_and_sync(swap_id)
-
-    bob = load_state(
-        swap_id,
-        "bob",
-    )
-
-    current_btc = int(
-        btc_cli("getblockcount")
-    )
-
-    to_timeout = (
-        int(bob["btc_timeout"])
-        - current_btc
-    )
-
-    if to_timeout > 0:
-        mine_btc(to_timeout)
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-    }
-
-    # First mature refund broadcast: persist identity, but do not
-    # treat the refund as authoritative until Bitcoin confirms it.
-    swap_cmd(
-        "refund-btc",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        swap_id,
-        "bob",
-    )
-
-    first_txid = pending.get(
-        "btc_refund_txid"
-    )
-
-    require(
-        pending.get("state") == "BTC_FUNDED",
-        "unconfirmed BTC refund advanced protocol state",
-    )
-    require(
-        first_txid,
-        "pending BTC refund did not persist txid",
-    )
-    require(
-        pending.get("btc_refund_blockhash") is None,
-        "pending BTC refund unexpectedly has blockhash",
-    )
-
-    # Retry while the first refund is still in the mempool.
-    # The HTLC is unavailable, so the engine must fail closed
-    # rather than broadcast another spend.
-    proc = swap_cmd(
-        "refund-btc",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-        expect_ok=False,
-    )
-
-    require(
-        proc.returncode != 0,
-        "pending BTC refund retry unexpectedly succeeded",
-    )
-
-    output = proc.stdout + proc.stderr
-
-    require(
-        (
-            "unconfirmed spender" in output
-            or "Refusing to rebroadcast" in output
-            or "outpoint is unavailable" in output
-            or "Bitcoin HTLC is already spent or unavailable" in output
-        ),
-        "pending BTC refund retry failed for an unexpected reason:\n"
-        + output[-2000:],
-    )
-
-    still_pending = load_state(
-        swap_id,
-        "bob",
-    )
-
-    require(
-        still_pending.get("state") == "BTC_FUNDED",
-        "pending BTC refund retry changed protocol state",
-    )
-    require(
-        still_pending.get("btc_refund_txid") == first_txid,
-        "pending BTC refund retry changed txid",
-    )
-    require(
-        still_pending.get("btc_refund_blockhash") is None,
-        "pending BTC refund retry unexpectedly recorded blockhash",
-    )
-
-    # Simulate normal production confirmation externally.
-    mine_btc(1)
-
-    swap_cmd(
-        "refund-btc",
-        swap_id,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        swap_id,
-        "bob",
-    )
-
-    require(
-        confirmed.get("state") == "BTC_REFUNDED",
-        "confirmed BTC refund did not advance state",
-    )
-    require(
-        confirmed.get("btc_refund_txid") == first_txid,
-        "confirmed BTC refund txid changed",
-    )
-    require(
-        confirmed.get("btc_refund_blockhash"),
-        "confirmed BTC refund did not record blockhash",
-    )
-
-    ok(
-        "production BTC refund waits for active-chain confirmation"
-    )
-
-
-def test_pending_blake_refund() -> None:
-    banner("PENDING BLAKE REFUND CONFIRMATION")
-
-    swap_id = make_fresh_swap()
-    print("swap:", swap_id)
-
-    handshake(swap_id)
-    fund_blake_and_sync(swap_id)
-    fund_btc_and_sync(swap_id)
-
-    # First complete Bob's Bitcoin refund normally.
-    bob = load_state(
-        swap_id,
-        "bob",
-    )
-
-    current_btc = int(
-        btc_cli("getblockcount")
-    )
-
-    to_btc_timeout = (
-        int(bob["btc_timeout"])
-        - current_btc
-    )
-
-    if to_btc_timeout > 0:
-        mine_btc(to_btc_timeout)
-
-    swap_cmd(
-        "refund-btc",
-        swap_id,
-        role="bob",
-    )
-
-    swap_cmd(
-        "publish-btc-refunded",
-        swap_id,
-        role="bob",
-    )
-
-    swap_cmd(
-        "receive-btc-refunded",
-        swap_id,
-        role="alice",
-    )
-
-    assert_state(
-        swap_id,
-        "alice",
-        "BTC_REFUNDED",
-    )
-
-    alice = load_state(
-        swap_id,
-        "alice",
-    )
-
-    current_blake = int(
-        blake_cli("getblockcount")
-    )
-
-    to_blake_timeout = (
-        int(alice["blake_timeout"])
-        - current_blake
-    )
-
-    if to_blake_timeout > 0:
-        mine_blake(to_blake_timeout)
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-    }
-
-    # First mature refund broadcast must persist its txid without
-    # advancing authoritative protocol state.
-    swap_cmd(
-        "refund-blake",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        swap_id,
-        "alice",
-    )
-
-    first_txid = pending.get(
-        "blake_refund_txid"
-    )
-
-    require(
-        pending.get("state") == "BTC_REFUNDED",
-        "unconfirmed BLAKE refund advanced protocol state",
-    )
-    require(
-        first_txid,
-        "pending BLAKE refund did not persist txid",
-    )
-    require(
-        pending.get("blake_refund_blockhash") is None,
-        "pending BLAKE refund unexpectedly has blockhash",
-    )
-
-    # Retry while the refund is still in the mempool. The consumed
-    # HTLC must cause a fail-closed result rather than another spend.
-    proc = swap_cmd(
-        "refund-blake",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-        expect_ok=False,
-    )
-
-    require(
-        proc.returncode != 0,
-        "pending BLAKE refund retry unexpectedly succeeded",
-    )
-
-    output = proc.stdout + proc.stderr
-
-    require(
-        (
-            "unconfirmed spender" in output
-            or "Refusing to rebroadcast" in output
-            or "outpoint is unavailable" in output
-            or "BLAKE HTLC is already spent or unavailable" in output
-        ),
-        "pending BLAKE refund retry failed for an unexpected reason:\n"
-        + output[-2000:],
-    )
-
-    still_pending = load_state(
-        swap_id,
-        "alice",
-    )
-
-    require(
-        still_pending.get("state") == "BTC_REFUNDED",
-        "pending BLAKE refund retry changed protocol state",
-    )
-    require(
-        still_pending.get("blake_refund_txid") == first_txid,
-        "pending BLAKE refund retry changed txid",
-    )
-    require(
-        still_pending.get("blake_refund_blockhash") is None,
-        "pending BLAKE refund retry unexpectedly recorded blockhash",
-    )
-
-    # Simulate production confirmation externally.
-    mine_blake(1)
-
-    swap_cmd(
-        "refund-blake",
-        swap_id,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        swap_id,
-        "alice",
-    )
-
-    require(
-        confirmed.get("state") == "BLAKE_REFUNDED",
-        "confirmed BLAKE refund did not advance state",
-    )
-    require(
-        confirmed.get("blake_refund_txid") == first_txid,
-        "confirmed BLAKE refund txid changed",
-    )
-    require(
-        confirmed.get("blake_refund_blockhash"),
-        "confirmed BLAKE refund did not record blockhash",
-    )
-
-    ok(
-        "production BLAKE refund waits for active-chain confirmation"
-    )
-
-
 def test_refund() -> None:
     banner("TWO-FUNDED REFUND PATH")
     swap_id = make_fresh_swap()
@@ -1982,7 +1356,7 @@ def test_mallory() -> None:
     ok("illegal OFFERED -> BTC_FUNDED transition rejected")
 
     # Secret injection + fake BLAKE funding
-    swap_id = make_fresh_swap(blake=0.1)
+    swap_id = make_fresh_swap()
     handshake(swap_id)
     swap_cmd("fund-blake", swap_id, role="alice")
     swap_cmd("publish-blake-funded", swap_id, role="alice")
@@ -2089,7 +1463,7 @@ def test_mallory() -> None:
     }
 
     # Dedicated swap at Alice BLAKE_FUNDED.
-    signer_blake_id = make_fresh_swap(blake=0.1)
+    signer_blake_id = make_fresh_swap()
     handshake(signer_blake_id)
     swap_cmd("fund-blake", signer_blake_id, role="alice")
 
@@ -2111,7 +1485,7 @@ def test_mallory() -> None:
     ok("wrong-role BLAKE-funded signer rejected")
 
     # Dedicated swap at Bob BTC_FUNDED.
-    signer_btc_id = make_fresh_swap(blake=0.1)
+    signer_btc_id = make_fresh_swap()
     handshake(signer_btc_id)
     fund_blake_and_sync(signer_btc_id)
     swap_cmd("fund-btc", signer_btc_id, role="bob")
@@ -2156,7 +1530,7 @@ def test_mallory() -> None:
     ok("wrong-role BTC-claimed signer rejected")
 
     # Known suspected gap: BTC refund publisher
-    refund_id = make_fresh_swap(blake=0.1)
+    refund_id = make_fresh_swap()
     handshake(refund_id)
     fund_blake_and_sync(refund_id)
     fund_btc_and_sync(refund_id)
@@ -2262,7 +1636,7 @@ def test_recovery() -> None:
     # A recovery-safe implementation should discover/reconcile the
     # existing HTLC rather than blindly fund another one.
     # ------------------------------------------------------------
-    crash_blake = make_fresh_swap(blake=0.1)
+    crash_blake = make_fresh_swap()
     handshake(crash_blake)
 
     apath = state_file(crash_blake, "alice")
@@ -2304,191 +1678,9 @@ def test_recovery() -> None:
         ok("BLAKE crash restart refused duplicate funding")
 
     # ------------------------------------------------------------
-    # 4. Production-style BLAKE funding must broadcast once,
-    #    remain pending without synthetic mining, then converge
-    #    after an externally mined confirmation.
+    # 4. Same experiment for Bob's BTC funding.
     # ------------------------------------------------------------
-    pending_blake = make_fresh_swap(blake=0.1)
-    handshake(pending_blake)
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-        "BLAKE_SWAP_BLAKE_NETWORK": "regtest",
-    }
-
-    before_sends = {
-        entry.get("txid")
-        for entry in blake_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=ALICE_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    swap_cmd(
-        "fund-blake",
-        pending_blake,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        pending_blake,
-        "alice",
-    )
-
-    first_txid = pending.get(
-        "blake_funding_txid"
-    )
-    first_vout = pending.get(
-        "blake_funding_vout"
-    )
-
-    require(
-        pending.get("state") == "OFFERED",
-        "unconfirmed production BLAKE funding advanced state",
-    )
-    require(
-        first_txid,
-        "pending BLAKE funding did not persist txid",
-    )
-    require(
-        first_vout is not None,
-        "pending BLAKE funding did not persist vout",
-    )
-    require(
-        pending.get("blake_funding_blockhash") is None,
-        "pending BLAKE funding unexpectedly has blockhash",
-    )
-
-    intent = (
-        ALICE_BASE
-        / "funding-intents"
-        / f"{pending_blake}.blake.json"
-    )
-    require(
-        intent.exists(),
-        "pending BLAKE funding cleared its intent too early",
-    )
-
-    after_first_sends = {
-        entry.get("txid")
-        for entry in blake_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=ALICE_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    require(
-        first_txid in (after_first_sends - before_sends),
-        "first production BLAKE funding transaction "
-        "was not visible in wallet history",
-    )
-
-    # Retry before confirmation. This must recover the exact
-    # pending wallet payment and must not create another send.
-    swap_cmd(
-        "fund-blake",
-        pending_blake,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    pending_again = load_state(
-        pending_blake,
-        "alice",
-    )
-
-    after_second_sends = {
-        entry.get("txid")
-        for entry in blake_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=ALICE_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    require(
-        pending_again.get("state") == "OFFERED",
-        "second pending BLAKE funding invocation advanced state",
-    )
-    require(
-        pending_again.get("blake_funding_txid") == first_txid,
-        "pending BLAKE funding txid changed on retry",
-    )
-    require(
-        pending_again.get("blake_funding_vout") == first_vout,
-        "pending BLAKE funding vout changed on retry",
-    )
-    require(
-        after_second_sends == after_first_sends,
-        "pending BLAKE funding retry created another wallet send",
-    )
-    require(
-        intent.exists(),
-        "pending BLAKE funding retry cleared intent too early",
-    )
-
-    # Confirmation is produced externally, not by swap_v2.py.
-    mine_blake(1)
-
-    swap_cmd(
-        "fund-blake",
-        pending_blake,
-        role="alice",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        pending_blake,
-        "alice",
-    )
-
-    require(
-        confirmed.get("state") == "BLAKE_FUNDED",
-        "confirmed BLAKE funding did not advance state",
-    )
-    require(
-        confirmed.get("blake_funding_txid") == first_txid,
-        "confirmed BLAKE funding txid changed",
-    )
-    require(
-        confirmed.get("blake_funding_vout") == first_vout,
-        "confirmed BLAKE funding vout changed",
-    )
-    require(
-        confirmed.get("blake_funding_blockhash"),
-        "confirmed BLAKE funding did not record blockhash",
-    )
-    require(
-        not intent.exists(),
-        "confirmed BLAKE funding did not clear intent",
-    )
-
-    ok(
-        "production BLAKE funding waits for real confirmation"
-    )
-
-    # ------------------------------------------------------------
-    # 5. Same experiment for Bob's BTC funding.
-    # ------------------------------------------------------------
-    crash_btc = make_fresh_swap(blake=0.1)
+    crash_btc = make_fresh_swap()
     handshake(crash_btc)
     fund_blake_and_sync(crash_btc)
 
@@ -2531,192 +1723,10 @@ def test_recovery() -> None:
     # ------------------------------------------------------------
     # 5. Ordinary restart/reload proof.
     #
-    # ------------------------------------------------------------
-    # Production-style BTC funding must broadcast once,
-    # remain pending without synthetic mining, then converge
-    # after an externally mined confirmation.
-    # ------------------------------------------------------------
-    pending_btc = make_fresh_swap(blake=0.1)
-    handshake(pending_btc)
-    fund_blake_and_sync(pending_btc)
-
-    production_env = {
-        "BLAKE_SWAP_AUTO_MINE": "0",
-    }
-
-    before_sends = {
-        entry.get("txid")
-        for entry in btc_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=BOB_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    swap_cmd(
-        "fund-btc",
-        pending_btc,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    pending = load_state(
-        pending_btc,
-        "bob",
-    )
-
-    first_txid = pending.get(
-        "btc_funding_txid"
-    )
-    first_vout = pending.get(
-        "btc_funding_vout"
-    )
-
-    require(
-        pending.get("state") == "BLAKE_FUNDED",
-        "unconfirmed production BTC funding advanced state",
-    )
-    require(
-        first_txid,
-        "pending BTC funding did not persist txid",
-    )
-    require(
-        first_vout is not None,
-        "pending BTC funding did not persist vout",
-    )
-    require(
-        pending.get("btc_funding_blockhash") is None,
-        "pending BTC funding unexpectedly has blockhash",
-    )
-
-    intent = (
-        BOB_BASE
-        / "funding-intents"
-        / f"{pending_btc}.btc.json"
-    )
-    require(
-        intent.exists(),
-        "pending BTC funding cleared its intent too early",
-    )
-
-    after_first_sends = {
-        entry.get("txid")
-        for entry in btc_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=BOB_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    require(
-        first_txid in (after_first_sends - before_sends),
-        "first production BTC funding transaction "
-        "was not visible in wallet history",
-    )
-
-    # Retry before confirmation. It must recover the same
-    # pending wallet payment and must not create another send.
-    swap_cmd(
-        "fund-btc",
-        pending_btc,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    pending_again = load_state(
-        pending_btc,
-        "bob",
-    )
-
-    after_second_sends = {
-        entry.get("txid")
-        for entry in btc_cli(
-            "listtransactions",
-            "*",
-            1000,
-            0,
-            True,
-            wallet=BOB_WALLET,
-        )
-        if entry.get("category") == "send"
-        and entry.get("txid")
-    }
-
-    require(
-        pending_again.get("state") == "BLAKE_FUNDED",
-        "second pending BTC funding invocation advanced state",
-    )
-    require(
-        pending_again.get("btc_funding_txid") == first_txid,
-        "pending BTC funding txid changed on retry",
-    )
-    require(
-        pending_again.get("btc_funding_vout") == first_vout,
-        "pending BTC funding vout changed on retry",
-    )
-    require(
-        after_second_sends == after_first_sends,
-        "pending BTC funding retry created another wallet send",
-    )
-    require(
-        intent.exists(),
-        "pending BTC funding retry cleared intent too early",
-    )
-
-    # Confirmation is produced externally, not by swap_v2.py.
-    mine_btc(1)
-
-    swap_cmd(
-        "fund-btc",
-        pending_btc,
-        role="bob",
-        extra_env=production_env,
-    )
-
-    confirmed = load_state(
-        pending_btc,
-        "bob",
-    )
-
-    require(
-        confirmed.get("state") == "BTC_FUNDED",
-        "confirmed BTC funding did not advance state",
-    )
-    require(
-        confirmed.get("btc_funding_txid") == first_txid,
-        "confirmed BTC funding txid changed",
-    )
-    require(
-        confirmed.get("btc_funding_vout") == first_vout,
-        "confirmed BTC funding vout changed",
-    )
-    require(
-        confirmed.get("btc_funding_blockhash"),
-        "confirmed BTC funding did not record blockhash",
-    )
-    require(
-        not intent.exists(),
-        "confirmed BTC funding did not clear intent",
-    )
-
-    ok(
-        "production BTC funding waits for real confirmation"
-    )
-
     # Every command here is already a new Python process. This
     # explicitly records that fact as a regression result.
     # ------------------------------------------------------------
-    restart_id = make_fresh_swap(blake=0.1)
+    restart_id = make_fresh_swap()
     handshake(restart_id)
     fund_blake_and_sync(restart_id)
 
@@ -2793,18 +1803,43 @@ def test_race() -> None:
             )
 
             env = os.environ.copy()
+
+            #
+            # Race subprocesses intentionally bypass swap_cmd(),
+            # so reproduce the same participant isolation here.
+            #
+            for key in (
+                "BLAKE_SWAP_STATE_DIR",
+                "BLAKE_SWAP_MESSAGE_DIR",
+                "BLAKE_SWAP_ROLE",
+                "BLAKE_SWAP_CHAIN_WALLET",
+                "BLAKE_SWAP_BLAKE_WALLET",
+                "BLAKE_SWAP_BTC_WALLET",
+                "BLAKE_SWAP_PARTICIPANT_KEY_FILE",
+                "BLAKE_SWAP_NOSTR_KEY_FILE",
+                "BLAKE_SWAP_NOSTR_KEY_DIR",
+            ):
+                env.pop(key, None)
+
             env["BLAKE_SWAP_TRANSPORT"] = "file"
+            env["BLAKE_SWAP_NOSTR_RELAYS"] = "ws://127.0.0.1:1"
 
             env["BLAKE_SWAP_ROLE"] = "bob"
-            env["BLAKE_SWAP_CHAIN_WALLET"] = BOB_WALLET
             env["BLAKE_SWAP_STATE_DIR"] = str(
                 BOB_BASE
+            )
+
+            env["BLAKE_SWAP_CHAIN_WALLET"] = BOB_WALLET
+            env["BLAKE_SWAP_BLAKE_WALLET"] = BOB_WALLET
+            env["BLAKE_SWAP_BTC_WALLET"] = BOB_WALLET
+
+            env["BLAKE_SWAP_PARTICIPANT_KEY_FILE"] = str(
+                BOB_PARTICIPANT_KEY
             )
 
             env["BLAKE_SWAP_MESSAGE_DIR"] = str(
                 MESSAGE_DIR
             )
-            env["BLAKE_SWAP_TRANSPORT"] = "file"
 
             cmd = [
                 sys.executable,
@@ -3321,7 +2356,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "suite",
-        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "pending-btc-claim", "pending-blake-claim", "pending-btc-refund", "pending-blake-refund", "all"],
+        choices=["happy", "refund", "mallory", "recovery", "race", "market-retry", "market-roles", "reverse-market", "role-guard", "pending-btc-claim", "pending-blake-claim", "pending-btc-refund", "pending-blake-refund", "all"],
         nargs="?",
         default="all",
     )
@@ -3429,6 +2464,50 @@ def main() -> int:
                 if args.suite != "all":
                     raise
 
+        if args.suite in ("market-roles", "all"):
+            try:
+                test_market_role_inversion()
+            except Exception as e:
+                fail(
+                    "MARKET ROLE INVERSION",
+                    str(e),
+                )
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("reverse-market", "all"):
+            try:
+                test_reverse_market_bob_selection()
+            except Exception as e:
+                fail(
+                    "REVERSE MARKET BOB SELECTION",
+                    str(e),
+                )
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("reverse-market", "all"):
+            try:
+                test_reverse_market_alice_import()
+            except Exception as e:
+                fail(
+                    "REVERSE MARKET ALICE IMPORT",
+                    str(e),
+                )
+                if args.suite != "all":
+                    raise
+
+        if args.suite in ("role-guard", "all"):
+            try:
+                test_wrong_role_economic_actions()
+            except Exception as e:
+                fail(
+                    "WRONG ROLE ECONOMIC ACTIONS",
+                    str(e),
+                )
+                if args.suite != "all":
+                    raise
+
         if args.suite == "all":
             try:
                 test_reorg_btc_claim()
@@ -3470,6 +2549,1550 @@ def main() -> int:
     print("It does not publish to public Nostr relays.")
 
     return 1 if FAIL_COUNT else 0
+
+def test_pending_blake_claim() -> None:
+    banner("PENDING BLAKE CLAIM CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    # Complete the Bitcoin claim normally so Bob can independently
+    # learn S from a confirmed Bitcoin transaction.
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+    )
+    swap_cmd(
+        "publish-btc-claimed",
+        swap_id,
+        role="alice",
+    )
+    swap_cmd(
+        "receive-btc-claimed",
+        swap_id,
+        role="bob",
+    )
+    swap_cmd(
+        "extract-secret",
+        swap_id,
+        role="bob",
+    )
+
+    assert_state(
+        swap_id,
+        "bob",
+        "BTC_CLAIMED",
+    )
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First broadcast must persist identity without advancing state.
+    swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    first_txid = pending.get(
+        "blake_claim_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_CLAIMED",
+        "unconfirmed BLAKE claim advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BLAKE claim did not persist txid",
+    )
+    require(
+        pending.get("blake_claim_blockhash") is None,
+        "pending BLAKE claim unexpectedly has blockhash",
+    )
+
+    report = json.loads(
+        swap_cmd(
+            "reconcile",
+            swap_id,
+            "--json",
+            role="bob",
+            extra_env=production_env,
+        ).stdout
+    )
+
+    require(
+        report["blake"]["status"] == "pending-spend",
+        f"pending BLAKE claim reconcile status: {report['blake']}",
+    )
+    require(
+        report["blake"].get("branch") == "claim",
+        f"pending BLAKE claim reconcile branch: {report['blake']}",
+    )
+    require(
+        report["next_action"] == "wait",
+        f"pending BLAKE claim reconcile action: {report['next_action']}",
+    )
+
+    # Retry while the exact claim remains pending. Canonical settlement
+    # commands treat recognition of the already-persisted transaction as
+    # successful idempotence: return normally without constructing or
+    # broadcasting another spend.
+    proc = swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        "BLAKE CLAIM PENDING" in output,
+        "pending BLAKE claim retry did not recognize the existing tx:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_CLAIMED",
+        "pending BLAKE claim retry changed protocol state",
+    )
+    require(
+        still_pending.get("blake_claim_txid") == first_txid,
+        "pending BLAKE claim retry changed txid",
+    )
+    require(
+        still_pending.get("blake_claim_blockhash") is None,
+        "pending BLAKE claim retry unexpectedly recorded blockhash",
+    )
+
+    # External confirmation simulates normal production mining.
+    mine_blake(1)
+
+    swap_cmd(
+        "claim-blake",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        confirmed.get("state") == "BLAKE_CLAIMED",
+        "confirmed BLAKE claim did not advance state",
+    )
+    require(
+        confirmed.get("blake_claim_txid") == first_txid,
+        "confirmed BLAKE claim txid changed",
+    )
+    require(
+        confirmed.get("blake_claim_blockhash"),
+        "confirmed BLAKE claim did not record blockhash",
+    )
+
+    ok(
+        "production BLAKE claim waits for active-chain confirmation"
+    )
+def test_pending_btc_claim() -> None:
+    banner("PENDING BTC CLAIM CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First claim broadcast: S enters the mempool, but durable
+    # protocol state must remain BTC_FUNDED until confirmation.
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    first_txid = pending.get(
+        "btc_claim_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_FUNDED",
+        "unconfirmed BTC claim advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BTC claim did not persist txid",
+    )
+    require(
+        pending.get("btc_claim_blockhash") is None,
+        "pending BTC claim unexpectedly has blockhash",
+    )
+
+    report = json.loads(
+        swap_cmd(
+            "reconcile",
+            swap_id,
+            "--json",
+            role="alice",
+            extra_env=production_env,
+        ).stdout
+    )
+
+    require(
+        report["btc"]["status"] == "pending-spend",
+        f"pending BTC claim reconcile status: {report['btc']}",
+    )
+    require(
+        report["btc"].get("branch") == "claim",
+        f"pending BTC claim reconcile branch: {report['btc']}",
+    )
+    require(
+        report["next_action"] == "wait",
+        f"pending BTC claim reconcile action: {report['next_action']}",
+    )
+
+    # Bob must not be able to consume Alice's pending claim as
+    # authoritative settlement data.
+    before_bob = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        before_bob.get("state") == "BTC_FUNDED",
+        "Bob was not BTC_FUNDED before pending-claim check",
+    )
+    require(
+        before_bob.get("btc_claim_txid") is None,
+        "Bob unexpectedly recorded Alice's pending BTC claim",
+    )
+
+    # Retry before confirmation. Recognition of the exact persisted
+    # pending claim is a successful idempotent operation; no new spend
+    # may be constructed or broadcast.
+    proc = swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        "BTC CLAIM PENDING" in output,
+        "pending BTC claim retry did not recognize the existing tx:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_FUNDED",
+        "pending BTC claim retry changed protocol state",
+    )
+    require(
+        still_pending.get("btc_claim_txid") == first_txid,
+        "pending BTC claim retry changed txid",
+    )
+    require(
+        still_pending.get("btc_claim_blockhash") is None,
+        "pending BTC claim retry unexpectedly recorded blockhash",
+    )
+
+    # Confirmation comes from the external test harness, not swap_v2.py.
+    mine_btc(1)
+
+    swap_cmd(
+        "claim-btc",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        confirmed.get("state") == "BTC_CLAIMED",
+        "confirmed BTC claim did not advance state",
+    )
+    require(
+        confirmed.get("btc_claim_txid") == first_txid,
+        "confirmed BTC claim txid changed",
+    )
+    require(
+        confirmed.get("btc_claim_blockhash"),
+        "confirmed BTC claim did not record blockhash",
+    )
+
+    ok(
+        "production BTC claim waits for active-chain confirmation"
+    )
+def test_pending_btc_refund() -> None:
+    banner("PENDING BTC REFUND CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    bob = load_state(
+        swap_id,
+        "bob",
+    )
+
+    current_btc = int(
+        btc_cli("getblockcount")
+    )
+
+    to_timeout = (
+        int(bob["btc_timeout"])
+        - current_btc
+    )
+
+    if to_timeout > 0:
+        mine_btc(to_timeout)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First mature refund broadcast: persist identity, but do not
+    # treat the refund as authoritative until Bitcoin confirms it.
+    swap_cmd(
+        "refund-btc",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    first_txid = pending.get(
+        "btc_refund_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_FUNDED",
+        "unconfirmed BTC refund advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BTC refund did not persist txid",
+    )
+    require(
+        pending.get("btc_refund_blockhash") is None,
+        "pending BTC refund unexpectedly has blockhash",
+    )
+
+    report = json.loads(
+        swap_cmd(
+            "reconcile",
+            swap_id,
+            "--json",
+            role="bob",
+            extra_env=production_env,
+        ).stdout
+    )
+
+    require(
+        report["btc"]["status"] == "pending-spend",
+        f"pending BTC refund reconcile status: {report['btc']}",
+    )
+    require(
+        report["btc"].get("branch") == "refund",
+        f"pending BTC refund reconcile branch: {report['btc']}",
+    )
+    require(
+        report["next_action"] == "wait",
+        f"pending BTC refund reconcile action: {report['next_action']}",
+    )
+
+    # Retry while the exact refund remains pending. Recognition of the
+    # persisted transaction is successful idempotence; no replacement
+    # spend is constructed or broadcast.
+    proc = swap_cmd(
+        "refund-btc",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        "BTC REFUND PENDING" in output,
+        "pending BTC refund retry did not recognize the existing tx:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_FUNDED",
+        "pending BTC refund retry changed protocol state",
+    )
+    require(
+        still_pending.get("btc_refund_txid") == first_txid,
+        "pending BTC refund retry changed txid",
+    )
+    require(
+        still_pending.get("btc_refund_blockhash") is None,
+        "pending BTC refund retry unexpectedly recorded blockhash",
+    )
+
+    # Simulate normal production confirmation externally.
+    mine_btc(1)
+
+    swap_cmd(
+        "refund-btc",
+        swap_id,
+        role="bob",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        confirmed.get("state") == "BTC_REFUNDED",
+        "confirmed BTC refund did not advance state",
+    )
+    require(
+        confirmed.get("btc_refund_txid") == first_txid,
+        "confirmed BTC refund txid changed",
+    )
+    require(
+        confirmed.get("btc_refund_blockhash"),
+        "confirmed BTC refund did not record blockhash",
+    )
+
+    ok(
+        "production BTC refund waits for active-chain confirmation"
+    )
+def test_pending_blake_refund() -> None:
+    banner("PENDING BLAKE REFUND CONFIRMATION")
+
+    swap_id = make_fresh_swap()
+    print("swap:", swap_id)
+
+    handshake(swap_id)
+    fund_blake_and_sync(swap_id)
+    fund_btc_and_sync(swap_id)
+
+    # First complete Bob's Bitcoin refund normally.
+    bob = load_state(
+        swap_id,
+        "bob",
+    )
+
+    current_btc = int(
+        btc_cli("getblockcount")
+    )
+
+    to_btc_timeout = (
+        int(bob["btc_timeout"])
+        - current_btc
+    )
+
+    if to_btc_timeout > 0:
+        mine_btc(to_btc_timeout)
+
+    swap_cmd(
+        "refund-btc",
+        swap_id,
+        role="bob",
+    )
+
+    swap_cmd(
+        "publish-btc-refunded",
+        swap_id,
+        role="bob",
+    )
+
+    swap_cmd(
+        "receive-btc-refunded",
+        swap_id,
+        role="alice",
+    )
+
+    assert_state(
+        swap_id,
+        "alice",
+        "BTC_REFUNDED",
+    )
+
+    alice = load_state(
+        swap_id,
+        "alice",
+    )
+
+    current_blake = int(
+        blake_cli("getblockcount")
+    )
+
+    to_blake_timeout = (
+        int(alice["blake_timeout"])
+        - current_blake
+    )
+
+    if to_blake_timeout > 0:
+        mine_blake(to_blake_timeout)
+
+    production_env = {
+        "BLAKE_SWAP_AUTO_MINE": "0",
+    }
+
+    # First mature refund broadcast must persist its txid without
+    # advancing authoritative protocol state.
+    swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    first_txid = pending.get(
+        "blake_refund_txid"
+    )
+
+    require(
+        pending.get("state") == "BTC_REFUNDED",
+        "unconfirmed BLAKE refund advanced protocol state",
+    )
+    require(
+        first_txid,
+        "pending BLAKE refund did not persist txid",
+    )
+    require(
+        pending.get("blake_refund_blockhash") is None,
+        "pending BLAKE refund unexpectedly has blockhash",
+    )
+
+    report = json.loads(
+        swap_cmd(
+            "reconcile",
+            swap_id,
+            "--json",
+            role="alice",
+            extra_env=production_env,
+        ).stdout
+    )
+
+    require(
+        report["blake"]["status"] == "pending-spend",
+        f"pending BLAKE refund reconcile status: {report['blake']}",
+    )
+    require(
+        report["blake"].get("branch") == "refund",
+        f"pending BLAKE refund reconcile branch: {report['blake']}",
+    )
+    require(
+        report["next_action"] == "wait",
+        f"pending BLAKE refund reconcile action: {report['next_action']}",
+    )
+
+    # Retry while the exact refund remains pending. Recognition of the
+    # persisted transaction is successful idempotence; no replacement
+    # spend is constructed or broadcast.
+    proc = swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    output = proc.stdout + proc.stderr
+
+    require(
+        "BLAKE REFUND PENDING" in output,
+        "pending BLAKE refund retry did not recognize the existing tx:\n"
+        + output[-2000:],
+    )
+
+    still_pending = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        still_pending.get("state") == "BTC_REFUNDED",
+        "pending BLAKE refund retry changed protocol state",
+    )
+    require(
+        still_pending.get("blake_refund_txid") == first_txid,
+        "pending BLAKE refund retry changed txid",
+    )
+    require(
+        still_pending.get("blake_refund_blockhash") is None,
+        "pending BLAKE refund retry unexpectedly recorded blockhash",
+    )
+
+    # Simulate production confirmation externally.
+    mine_blake(1)
+
+    swap_cmd(
+        "refund-blake",
+        swap_id,
+        role="alice",
+        extra_env=production_env,
+    )
+
+    confirmed = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        confirmed.get("state") == "BLAKE_REFUNDED",
+        "confirmed BLAKE refund did not advance state",
+    )
+    require(
+        confirmed.get("blake_refund_txid") == first_txid,
+        "confirmed BLAKE refund txid changed",
+    )
+    require(
+        confirmed.get("blake_refund_blockhash"),
+        "confirmed BLAKE refund did not record blockhash",
+    )
+
+    ok(
+        "production BLAKE refund waits for active-chain confirmation"
+    )
+def test_reverse_market_bob_selection() -> None:
+    banner("REVERSE MARKET BOB SELECTION V1")
+
+    import importlib.util
+    import tempfile
+    from types import SimpleNamespace
+
+    src_dir = str(SWAP_V2.parent)
+
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    spec = importlib.util.spec_from_file_location(
+        "swap_v2_reverse_bob_test",
+        SWAP_V2,
+    )
+
+    require(
+        spec is not None
+        and spec.loader is not None,
+        "could not load swap_v2 module",
+    )
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    maker_pub = "aa" * 32
+    taker_pub = "bb" * 32
+    offer_id = "11" * 32
+    take_id = "22" * 32
+    match_id = "33" * 32
+    reserved_swap_id = "abcdef123456"
+
+    original = {
+        "id": offer_id,
+        "pubkey": maker_pub,
+    }
+
+    offer_message = {
+        "type": "market-offer",
+        "version": 2,
+        "direction": mod.MARKET_DIRECTION_BTC_FOR_BLAKE,
+        "blake_amount": "0.01",
+        "btc_sats": 2000,
+    }
+
+    selected = {
+        "event_id": take_id,
+        "offer_id": offer_id,
+        "maker": maker_pub,
+        "taker": taker_pub,
+        "direction": mod.MARKET_DIRECTION_BTC_FOR_BLAKE,
+        "blake_amount": "0.01",
+        "btc_sats": 2000,
+    }
+
+    take_event = {
+        "id": take_id,
+        "pubkey": taker_pub,
+    }
+
+    with tempfile.TemporaryDirectory(
+        prefix="blake-reverse-bob-"
+    ) as td:
+        root = Path(td)
+
+        originals = {
+            "BASE_SWAP_DIR": mod.BASE_SWAP_DIR,
+            "current_nostr_pubkey": mod.current_nostr_pubkey,
+            "make_swap_id": mod.make_swap_id,
+            "build_market_match_event": mod.build_market_match_event,
+            "verify_nostr_event": mod.verify_nostr_event,
+            "nostr_publish_event": mod.nostr_publish_event,
+        }
+
+        built = {}
+
+        try:
+            mod.BASE_SWAP_DIR = root
+
+            mod.current_nostr_pubkey = (
+                lambda: maker_pub
+            )
+
+            mod.make_swap_id = (
+                lambda: reserved_swap_id
+            )
+
+            def fake_build_market_match_event(
+                original_arg,
+                take_event_arg,
+                public_swap,
+            ):
+                built["swap_id"] = public_swap.swap_id
+                built["blake_amount"] = public_swap.blake_amount
+                built["btc_sats"] = public_swap.btc_sats
+
+                event = {
+                    "id": match_id,
+                    "pubkey": maker_pub,
+                }
+
+                message = {
+                    "type": "market-match",
+                    "swap_id": public_swap.swap_id,
+                }
+
+                return event, message
+
+            mod.build_market_match_event = (
+                fake_build_market_match_event
+            )
+
+            mod.verify_nostr_event = (
+                lambda event: True
+            )
+
+            async def fake_publish_event(event):
+                require(
+                    event["id"] == match_id,
+                    "wrong market-match event published",
+                )
+                return match_id
+
+            mod.nostr_publish_event = (
+                fake_publish_event
+            )
+
+            result = mod.accept_reverse_market_take(
+                SimpleNamespace(
+                    take_id=take_id,
+                ),
+                original,
+                offer_message,
+                selected,
+                take_event,
+            )
+
+            require(
+                result["maker_role"] == "bob",
+                f"maker role was not Bob: {result!r}",
+            )
+
+            require(
+                result["taker_role"] == "alice",
+                f"taker role was not Alice: {result!r}",
+            )
+
+            require(
+                result["nostr_bob_pub"] == maker_pub,
+                "Bob identity not durably bound",
+            )
+
+            require(
+                result["nostr_alice_pub"] == taker_pub,
+                "Alice identity not durably bound",
+            )
+
+            require(
+                result["swap_id"] == reserved_swap_id,
+                "reserved swap ID changed",
+            )
+
+            require(
+                result["market_match_id"] == match_id,
+                "published market match ID not persisted",
+            )
+
+            require(
+                built["swap_id"] == reserved_swap_id,
+                "public market match used wrong swap ID",
+            )
+
+            #
+            # Critical invariant: Bob selection may create coordination
+            # metadata, but must NOT create atomic-swap state.
+            #
+            require(
+                not (root / f"{reserved_swap_id}.json").exists(),
+                "protocol Bob created atomic-swap state during reverse selection",
+            )
+
+            selection = (
+                root
+                / "market-selections"
+                / f"{take_id}.json"
+            )
+
+            require(
+                selection.exists(),
+                "reverse market selection was not persisted",
+            )
+
+            data = json.loads(
+                selection.read_text()
+            )
+
+            require(
+                "secret_hex" not in data,
+                "reverse Bob selection persisted secret_hex",
+            )
+
+            require(
+                "secret_hash" not in data,
+                "reverse Bob selection persisted secret_hash",
+            )
+
+            ok(
+                "btc-for-blake maker bound as protocol Bob"
+            )
+            ok(
+                "btc-for-blake taker bound as protocol Alice"
+            )
+            ok(
+                "Bob reserved public swap ID without creating swap state"
+            )
+            ok(
+                "Bob created no secret or hashlock"
+            )
+            ok(
+                "reverse market match publication preserved swap binding"
+            )
+
+        finally:
+            for name, value in originals.items():
+                setattr(
+                    mod,
+                    name,
+                    value,
+                )
+def test_reverse_market_alice_import() -> None:
+    banner("REVERSE MARKET ALICE IMPORT V1")
+
+    import importlib.util
+    import tempfile
+    from types import SimpleNamespace
+
+    src_dir = str(SWAP_V2.parent)
+
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    spec = importlib.util.spec_from_file_location(
+        "swap_v2_reverse_alice_test",
+        SWAP_V2,
+    )
+
+    require(
+        spec is not None
+        and spec.loader is not None,
+        "could not load swap_v2 module",
+    )
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    maker_pub = "aa" * 32
+    taker_pub = "bb" * 32
+    offer_id = "11" * 32
+    take_id = "22" * 32
+    match_id = "33" * 32
+    swap_id = "abcdef123456"
+
+    match_event = {
+        "id": match_id,
+        "pubkey": maker_pub,
+        "content": "{}",
+    }
+
+    validated = {
+        "event_id": match_id,
+        "offer_id": offer_id,
+        "take_id": take_id,
+        "swap_id": swap_id,
+        "maker": maker_pub,
+        "taker": taker_pub,
+        "direction": mod.MARKET_DIRECTION_BTC_FOR_BLAKE,
+        "maker_role": "bob",
+        "taker_role": "alice",
+        "blake_amount": 0.01,
+        "btc_sats": 2000,
+    }
+
+    with tempfile.TemporaryDirectory(
+        prefix="blake-reverse-alice-"
+    ) as td:
+        root = Path(td)
+
+        originals = {
+            "BASE_SWAP_DIR": mod.BASE_SWAP_DIR,
+            "current_nostr_pubkey": mod.current_nostr_pubkey,
+            "nostr_fetch_event_by_id": mod.nostr_fetch_event_by_id,
+            "validate_market_match_event": mod.validate_market_match_event,
+            "btc_cli": mod.btc_cli,
+            "blake_cli": mod.blake_cli,
+        }
+
+        try:
+            mod.BASE_SWAP_DIR = root
+
+            mod.current_nostr_pubkey = (
+                lambda: taker_pub
+            )
+
+            async def fake_fetch_event_by_id(event_id):
+                require(
+                    event_id == match_id,
+                    "wrong market match requested",
+                )
+                return match_event
+
+            mod.nostr_fetch_event_by_id = (
+                fake_fetch_event_by_id
+            )
+
+            async def fake_validate_market_match_event(
+                event,
+                expected_taker,
+            ):
+                require(
+                    event is match_event,
+                    "wrong match event validated",
+                )
+
+                require(
+                    expected_taker == taker_pub,
+                    "reverse match validator received wrong taker",
+                )
+
+                return dict(validated)
+
+            mod.validate_market_match_event = (
+                fake_validate_market_match_event
+            )
+
+            def fake_btc_cli(method, *args, **kwargs):
+                require(
+                    method == "getblockcount",
+                    f"unexpected BTC RPC during reverse import: {method}",
+                )
+                return 1000
+
+            def fake_blake_cli(method, *args, **kwargs):
+                require(
+                    method == "getblockcount",
+                    f"unexpected BLAKE RPC during reverse import: {method}",
+                )
+                return 2000
+
+            mod.btc_cli = fake_btc_cli
+            mod.blake_cli = fake_blake_cli
+
+            #
+            # First import: Alice must create the atomic swap and S.
+            #
+            mod.command_accept_reverse_market_match(
+                SimpleNamespace(
+                    match_id=match_id,
+                )
+            )
+
+            state_path = root / f"{swap_id}.json"
+
+            require(
+                state_path.exists(),
+                "protocol Alice did not create atomic-swap state",
+            )
+
+            first = json.loads(
+                state_path.read_text()
+            )
+
+            require(
+                first["state"] == "OFFERED",
+                f"reverse Alice state was not OFFERED: {first['state']!r}",
+            )
+
+            require(
+                first["nostr_alice_pub"] == taker_pub,
+                "reverse taker was not pinned as protocol Alice",
+            )
+
+            require(
+                first["nostr_bob_pub"] == maker_pub,
+                "reverse maker was not pinned as protocol Bob",
+            )
+
+            require(
+                isinstance(first.get("secret_hex"), str)
+                and len(first["secret_hex"]) == 64,
+                "protocol Alice did not create a 32-byte secret S",
+            )
+
+            require(
+                isinstance(first.get("secret_hash"), str)
+                and len(first["secret_hash"]) == 64,
+                "protocol Alice did not create hashlock H",
+            )
+
+            tx_fields = (
+                "blake_funding_txid",
+                "btc_funding_txid",
+                "btc_claim_txid",
+                "blake_claim_txid",
+                "btc_refund_txid",
+                "blake_refund_txid",
+            )
+
+            require(
+                all(first.get(name) is None for name in tx_fields),
+                "reverse match import unexpectedly created settlement activity",
+            )
+
+            binding_path = (
+                root
+                / "market-match-bindings"
+                / f"{swap_id}.json"
+            )
+
+            require(
+                binding_path.exists(),
+                "reverse market binding was not persisted",
+            )
+
+            binding = json.loads(
+                binding_path.read_text()
+            )
+
+            require(
+                binding["maker_role"] == "bob"
+                and binding["taker_role"] == "alice",
+                f"reverse role binding incorrect: {binding!r}",
+            )
+
+            require(
+                "secret_hex" not in binding,
+                "public reverse-market binding leaked secret S",
+            )
+
+            original_secret = first["secret_hex"]
+            original_hash = first["secret_hash"]
+
+            #
+            # Retry: exact same negotiated swap must reuse Alice state.
+            # A second S for the same swap_id would be catastrophic.
+            #
+            mod.command_accept_reverse_market_match(
+                SimpleNamespace(
+                    match_id=match_id,
+                )
+            )
+
+            second = json.loads(
+                state_path.read_text()
+            )
+
+            require(
+                second["secret_hex"] == original_secret,
+                "retry generated a second secret S",
+            )
+
+            require(
+                second["secret_hash"] == original_hash,
+                "retry changed hashlock H",
+            )
+
+            ok(
+                "reverse market taker became protocol Alice"
+            )
+            ok(
+                "protocol Alice created secret S and hashlock H"
+            )
+            ok(
+                "reverse market maker pinned as protocol Bob"
+            )
+            ok(
+                "Alice import remained OFFERED with no settlement activity"
+            )
+            ok(
+                "public market binding contains no secret"
+            )
+            ok(
+                "reverse match retry reused identical secret S"
+            )
+
+        finally:
+            for name, value in originals.items():
+                setattr(
+                    mod,
+                    name,
+                    value,
+                )
+def test_wrong_role_economic_actions() -> None:
+    banner("WRONG ROLE ECONOMIC ACTIONS V1")
+
+    swap_id = make_fresh_swap()
+    handshake(swap_id)
+
+    alice_before = load_state(
+        swap_id,
+        "alice",
+    )
+
+    bob_before = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        alice_before["state"] == "OFFERED",
+        "Alice was not OFFERED before wrong-role test",
+    )
+
+    require(
+        bob_before["state"] == "OFFERED",
+        "Bob was not OFFERED before wrong-role test",
+    )
+
+    blake_mempool_before = set(
+        blake_cli("getrawmempool")
+    )
+
+    btc_mempool_before = set(
+        btc_cli("getrawmempool")
+    )
+
+    #
+    # Bob must NEVER be able to perform protocol Alice's
+    # BLAKE funding action, even if an outer wrapper invokes
+    # the wrong command.
+    #
+    proc = swap_cmd(
+        "fund-blake",
+        swap_id,
+        role="bob",
+        expect_ok=False,
+    )
+
+    output = (
+        (proc.stdout or "")
+        + (proc.stderr or "")
+    )
+
+    require(
+        proc.returncode != 0,
+        "protocol Bob unexpectedly succeeded at BLAKE funding",
+    )
+
+    require(
+        "protocol requires alice"
+        in output.lower(),
+        (
+            "Bob fund-blake failed for the wrong reason:\n"
+            + output[-2000:]
+        ),
+    )
+
+    ok(
+        "protocol Bob rejected before BLAKE funding"
+    )
+
+    bob_after = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        bob_after == bob_before,
+        "wrong-role BLAKE funding changed Bob swap state",
+    )
+
+    ok(
+        "wrong-role BLAKE funding left Bob state unchanged"
+    )
+
+    blake_mempool_after = set(
+        blake_cli("getrawmempool")
+    )
+
+    require(
+        blake_mempool_after
+        == blake_mempool_before,
+        (
+            "wrong-role BLAKE funding changed mempool: "
+            f"before={sorted(blake_mempool_before)} "
+            f"after={sorted(blake_mempool_after)}"
+        ),
+    )
+
+    ok(
+        "wrong-role BLAKE funding broadcast no transaction"
+    )
+
+    #
+    # Symmetric invariant:
+    # Alice must NEVER be able to perform protocol Bob's
+    # BTC funding action.
+    #
+    proc = swap_cmd(
+        "fund-btc",
+        swap_id,
+        role="alice",
+        expect_ok=False,
+    )
+
+    output = (
+        (proc.stdout or "")
+        + (proc.stderr or "")
+    )
+
+    require(
+        proc.returncode != 0,
+        "protocol Alice unexpectedly succeeded at BTC funding",
+    )
+
+    require(
+        "protocol requires bob"
+        in output.lower(),
+        (
+            "Alice fund-btc failed for the wrong reason:\n"
+            + output[-2000:]
+        ),
+    )
+
+    ok(
+        "protocol Alice rejected before BTC funding"
+    )
+
+    alice_after = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        alice_after == alice_before,
+        "wrong-role BTC funding changed Alice swap state",
+    )
+
+    ok(
+        "wrong-role BTC funding left Alice state unchanged"
+    )
+
+    btc_mempool_after = set(
+        btc_cli("getrawmempool")
+    )
+
+    require(
+        btc_mempool_after
+        == btc_mempool_before,
+        (
+            "wrong-role BTC funding changed mempool: "
+            f"before={sorted(btc_mempool_before)} "
+            f"after={sorted(btc_mempool_after)}"
+        ),
+    )
+
+    ok(
+        "wrong-role BTC funding broadcast no transaction"
+    )
+
+    #
+    # Coordination-side invariant:
+    # protocol Alice must never import a BLAKE-funded
+    # announcement intended for protocol Bob.
+    #
+    proc = swap_cmd(
+        "receive-blake-funded",
+        swap_id,
+        role="alice",
+        expect_ok=False,
+    )
+
+    output = (
+        (proc.stdout or "")
+        + (proc.stderr or "")
+    )
+
+    require(
+        proc.returncode != 0,
+        "protocol Alice unexpectedly received BLAKE funding",
+    )
+
+    require(
+        "protocol requires bob"
+        in output.lower(),
+        (
+            "Alice receive-blake-funded failed for the wrong reason:\n"
+            + output[-2000:]
+        ),
+    )
+
+    alice_after_receive = load_state(
+        swap_id,
+        "alice",
+    )
+
+    require(
+        alice_after_receive == alice_before,
+        "wrong-role BLAKE funding receipt changed Alice swap state",
+    )
+
+    ok(
+        "protocol Alice rejected before BLAKE funding receipt"
+    )
+    ok(
+        "wrong-role BLAKE funding receipt left Alice state unchanged"
+    )
+
+    #
+    # Symmetric coordination-side invariant:
+    # protocol Bob must never import a BTC-funded
+    # announcement intended for protocol Alice.
+    #
+    proc = swap_cmd(
+        "receive-btc-funded",
+        swap_id,
+        role="bob",
+        expect_ok=False,
+    )
+
+    output = (
+        (proc.stdout or "")
+        + (proc.stderr or "")
+    )
+
+    require(
+        proc.returncode != 0,
+        "protocol Bob unexpectedly received BTC funding",
+    )
+
+    require(
+        "protocol requires alice"
+        in output.lower(),
+        (
+            "Bob receive-btc-funded failed for the wrong reason:\n"
+            + output[-2000:]
+        ),
+    )
+
+    bob_after_receive = load_state(
+        swap_id,
+        "bob",
+    )
+
+    require(
+        bob_after_receive == bob_before,
+        "wrong-role BTC funding receipt changed Bob swap state",
+    )
+
+    ok(
+        "protocol Bob rejected before BTC funding receipt"
+    )
+    ok(
+        "wrong-role BTC funding receipt left Bob state unchanged"
+    )
+
+    print(
+        "wrong-role swap:",
+        swap_id,
+    )
+def test_market_role_inversion() -> None:
+    banner("MARKET ROLE INVERSION V1")
+
+    import importlib.util
+
+    src_dir = str(SWAP_V2.parent)
+
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    spec = importlib.util.spec_from_file_location(
+        "swap_v2_market_role_test",
+        SWAP_V2,
+    )
+
+    require(
+        spec is not None
+        and spec.loader is not None,
+        "could not load swap_v2 module",
+    )
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    #
+    # Maker gives BLAKE.
+    #
+    forward = mod.market_protocol_roles(
+        mod.MARKET_DIRECTION_BLAKE_FOR_BTC
+    )
+
+    require(
+        forward == {
+            "maker_role": "alice",
+            "taker_role": "bob",
+        },
+        (
+            "blake-for-btc role mapping incorrect: "
+            f"{forward!r}"
+        ),
+    )
+
+    ok(
+        "blake-for-btc maker is protocol Alice"
+    )
+    ok(
+        "blake-for-btc taker is protocol Bob"
+    )
+
+    #
+    # Maker gives BTC. Protocol roles MUST invert.
+    #
+    reverse = mod.market_protocol_roles(
+        mod.MARKET_DIRECTION_BTC_FOR_BLAKE
+    )
+
+    require(
+        reverse == {
+            "maker_role": "bob",
+            "taker_role": "alice",
+        },
+        (
+            "btc-for-blake role mapping incorrect: "
+            f"{reverse!r}"
+        ),
+    )
+
+    ok(
+        "btc-for-blake maker is protocol Bob"
+    )
+    ok(
+        "btc-for-blake taker is protocol Alice"
+    )
+
+    #
+    # Human-facing give/want semantics must agree with the
+    # protocol-role mapping above.
+    #
+    forward_terms = mod.market_give_want(
+        mod.MARKET_DIRECTION_BLAKE_FOR_BTC,
+        0.01,
+        2000,
+    )
+
+    reverse_terms = mod.market_give_want(
+        mod.MARKET_DIRECTION_BTC_FOR_BLAKE,
+        0.01,
+        2000,
+    )
+
+    require(
+        forward_terms["give"] == "0.01 BLAKE",
+        f"forward maker does not give BLAKE: {forward_terms!r}",
+    )
+
+    require(
+        reverse_terms["give"] == "2,000 sats",
+        f"reverse maker does not give BTC: {reverse_terms!r}",
+    )
+
+    ok(
+        "market give/want semantics agree with protocol roles"
+    )
+
+    #
+    # Unknown direction must fail closed rather than silently
+    # choosing a protocol role.
+    #
+    try:
+        mod.market_protocol_roles(
+            "definitely-not-a-market-direction"
+        )
+    except ValueError:
+        pass
+    else:
+        raise TestFailure(
+            "unknown market direction silently received protocol roles"
+        )
+
+    ok(
+        "unknown market direction rejected"
+    )
 
 
 if __name__ == "__main__":

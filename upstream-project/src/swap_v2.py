@@ -19,6 +19,12 @@ from swap_timeout_policy import (
     validate_timeout_plan,
 )
 
+from fee_policy import (
+    choose_fee_rate_sat_vb,
+    fee_for_vsize,
+    enforce_fee_cap,
+)
+
 import subprocess
 import os
 import shlex
@@ -82,34 +88,6 @@ BTC_RPC_ARGS = tuple(
     )
 )
 
-# Chain selection and confirmation policy are intentionally separate.
-# Existing development/test behavior remains BLAKE regtest + auto-mining.
-BLAKE_NETWORK = os.environ.get(
-    "BLAKE_SWAP_BLAKE_NETWORK",
-    "regtest",
-).strip().lower()
-
-if BLAKE_NETWORK not in {
-    "main",
-    "regtest",
-}:
-    raise ValueError(
-        "BLAKE_SWAP_BLAKE_NETWORK must be main or regtest"
-    )
-
-# Regtest historically confirms transactions by mining immediately.
-# Production integrations such as StartOS disable this and let normal
-# chain confirmation + resume/reconciliation advance durable state.
-AUTO_MINE = os.environ.get(
-    "BLAKE_SWAP_AUTO_MINE",
-    "1",
-).strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
-
 ALICE_WALLET = "alice"
 BOB_WALLET = "bob"
 
@@ -118,21 +96,26 @@ PARTICIPANT_ROLE = os.environ.get(
     "alice",
 )
 
-LEGACY_WALLET = os.environ.get(
+LOCAL_WALLET = os.environ.get(
     "BLAKE_SWAP_CHAIN_WALLET",
     ALICE_WALLET
     if PARTICIPANT_ROLE == "alice"
     else BOB_WALLET,
 )
 
+# Backward-compatible chain-specific wallet overrides.
+#
+# Existing profiles that set only BLAKE_SWAP_CHAIN_WALLET continue
+# to behave exactly as before. Mixed-provider deployments may select
+# independent signing wallets for BLAKE and Bitcoin.
 BLAKE_WALLET = os.environ.get(
     "BLAKE_SWAP_BLAKE_WALLET",
-    LEGACY_WALLET,
+    LOCAL_WALLET,
 )
 
 BTC_WALLET = os.environ.get(
     "BLAKE_SWAP_BTC_WALLET",
-    LEGACY_WALLET,
+    LOCAL_WALLET,
 )
 
 # BLAKE-side keys
@@ -619,10 +602,8 @@ def print_swap(swap):
 def blake_cli(*args, wallet=None):
     cmd = [
         BLAKE_CLI,
+        "-regtest",
     ]
-
-    if BLAKE_NETWORK == "regtest":
-        cmd.append("-regtest")
 
     if BLAKE_DATADIR:
         cmd.append(
@@ -1026,17 +1007,117 @@ def find_confirmed_htlc_spend(
         )
 
         if not settlement_blockhash:
-            raise RuntimeError(
-                "SECURITY FAILURE: durable state records "
-                f"{chain_name} {expected_branch} txid but no blockhash"
+            #
+            # Production-style settlement persists the broadcast txid
+            # immediately, while deliberately leaving protocol state
+            # unchanged until active-chain confirmation.
+            #
+            # A known txid with no blockhash is therefore a normal pending
+            # condition, not corruption.  Independently verify the exact
+            # transaction before refusing any rebroadcast.
+            #
+            try:
+                tx = cli(
+                    "getrawtransaction",
+                    settlement_txid,
+                    True,
+                )
+            except Exception:
+                #
+                # Nodes without txindex cannot necessarily retrieve a
+                # wallet-created transaction through getrawtransaction
+                # once it is no longer exposed by the mempool lookup.
+                #
+                # This participant created the recorded settlement, so
+                # recover it from the local wallet and independently
+                # decode the raw transaction instead.
+                #
+                wallet = (
+                    BTC_WALLET
+                    if chain == "btc"
+                    else BLAKE_WALLET
+                )
+
+                try:
+                    wallet_tx = cli(
+                        "gettransaction",
+                        settlement_txid,
+                        wallet=wallet,
+                    )
+
+                    tx = cli(
+                        "decoderawtransaction",
+                        wallet_tx["hex"],
+                    )
+
+                    tx["confirmations"] = int(
+                        wallet_tx.get("confirmations", 0) or 0
+                    )
+
+                    if wallet_tx.get("blockhash"):
+                        tx["blockhash"] = wallet_tx["blockhash"]
+
+                except Exception as e:
+                    raise RuntimeError(
+                        "SECURITY FAILURE: durable state records "
+                        f"{chain_name} {expected_branch} txid "
+                        "but the transaction cannot be independently verified"
+                    ) from e
+
+            spends_htlc = any(
+                vin.get("txid") == funding_txid
+                and int(vin.get("vout", -1)) == int(funding_vout)
+                for vin in tx.get("vin", [])
             )
 
-        tx = cli(
-            "getrawtransaction",
-            settlement_txid,
-            True,
-            settlement_blockhash,
-        )
+            if not spends_htlc:
+                raise RuntimeError(
+                    "SECURITY FAILURE: recorded "
+                    f"{chain_name} {expected_branch} transaction "
+                    "does not spend this swap's HTLC"
+                )
+
+            actual_branch = classify_htlc_spend(
+                tx,
+                funding_txid,
+                funding_vout,
+                swap.secret_hash,
+            )
+
+            if actual_branch != expected_branch:
+                raise RuntimeError(
+                    "SECURITY FAILURE: recorded "
+                    f"{chain_name} settlement branch mismatch: "
+                    f"expected {expected_branch}, observed {actual_branch}"
+                )
+
+            confirmations = int(
+                tx.get("confirmations", 0) or 0
+            )
+
+            if confirmations < 1:
+                raise RuntimeError(
+                    "PENDING: recorded "
+                    f"{chain_name} {expected_branch} transaction "
+                    "is unconfirmed; refusing to rebroadcast"
+                )
+
+            settlement_blockhash = tx.get("blockhash")
+
+            if not settlement_blockhash:
+                raise RuntimeError(
+                    "SECURITY FAILURE: confirmed recorded "
+                    f"{chain_name} {expected_branch} transaction "
+                    "has no blockhash"
+                )
+
+        else:
+            tx = cli(
+                "getrawtransaction",
+                settlement_txid,
+                True,
+                settlement_blockhash,
+            )
 
         if tx.get("in_active_chain") is False:
             raise RuntimeError(
@@ -1167,12 +1248,87 @@ def find_confirmed_htlc_spend(
 
     return None
 
-
 def require_recovered_branch(
     swap,
     chain,
     expected_branch,
 ):
+    if chain == "btc":
+        cli = btc_cli
+
+        if expected_branch == "claim":
+            recorded_txid = swap.btc_claim_txid
+        elif expected_branch == "refund":
+            recorded_txid = swap.btc_refund_txid
+        else:
+            raise ValueError(
+                f"Unknown Bitcoin settlement branch: {expected_branch}"
+            )
+
+        funding_txid = swap.btc_funding_txid
+        funding_vout = swap.btc_funding_vout
+
+    elif chain == "blake":
+        cli = blake_cli
+
+        if expected_branch == "claim":
+            recorded_txid = swap.blake_claim_txid
+        elif expected_branch == "refund":
+            recorded_txid = swap.blake_refund_txid
+        else:
+            raise ValueError(
+                f"Unknown BLAKE settlement branch: {expected_branch}"
+            )
+
+        funding_txid = swap.blake_funding_txid
+        funding_vout = swap.blake_funding_vout
+
+    else:
+        raise ValueError(
+            f"Unknown HTLC chain: {chain}"
+        )
+
+    #
+    # If this participant previously broadcast an exact settlement
+    # transaction, recognize that exact tx while it remains pending.
+    #
+    # This does NOT weaken the fail-closed behavior for an unknown
+    # mempool spender: without a recorded txid we still fall through
+    # to find_confirmed_htlc_spend(), whose gettxout check refuses to
+    # rebroadcast against an unavailable outpoint.
+    #
+    if recorded_txid:
+        try:
+            cli(
+                "getmempoolentry",
+                recorded_txid,
+            )
+
+            tx = cli(
+                "getrawtransaction",
+                recorded_txid,
+                True,
+            )
+
+            actual = classify_htlc_spend(
+                tx,
+                funding_txid,
+                funding_vout,
+                swap.secret_hash,
+            )
+
+            if actual != expected_branch:
+                raise RuntimeError(
+                    "SECURITY FAILURE: recorded pending settlement "
+                    f"uses {actual} branch; expected {expected_branch}"
+                )
+
+            return "pending"
+
+        except RuntimeError as e:
+            if "Transaction not in mempool" not in str(e):
+                raise
+
     found = find_confirmed_htlc_spend(
         swap,
         chain,
@@ -1187,6 +1343,15 @@ def require_recovered_branch(
         raise RuntimeError(
             "SECURITY FAILURE: HTLC was already spent by "
             f"the {actual} branch; expected {expected_branch}"
+        )
+
+    if (
+        recorded_txid
+        and found["txid"] != recorded_txid
+    ):
+        raise RuntimeError(
+            "SECURITY FAILURE: confirmed settlement txid differs "
+            "from the exact transaction previously broadcast"
         )
 
     return found
@@ -1238,6 +1403,24 @@ def command_extract_secret(args):
         "PASS: Bob recovered S from the "
         "Bitcoin transaction"
     )
+
+def auto_mine_enabled():
+    raw = os.environ.get(
+        "BLAKE_SWAP_AUTO_MINE",
+        "1",
+    ).strip().lower()
+
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+
+    if raw in {"0", "false", "no", "off"}:
+        return False
+
+    raise ValueError(
+        "BLAKE_SWAP_AUTO_MINE must be 0/1, "
+        "false/true, no/yes, or off/on"
+    )
+
 
 def mine_btc(blocks=1):
     wallet = BTC_WALLET
@@ -1347,6 +1530,119 @@ def write_funding_intent(
     os.replace(tmp, path)
 
     return path
+
+
+def record_funding_broadcast(
+    swap_id,
+    chain,
+    txid,
+    vout,
+):
+    """
+    Extend the already-durable funding intent with the exact
+    transaction identity after broadcast.
+
+    The protocol checkpoint is deliberately NOT advanced here.
+    """
+    path = funding_intent_path(
+        swap_id,
+        chain,
+    )
+
+    if not path.exists():
+        raise RuntimeError(
+            "Funding intent disappeared before "
+            "broadcast identity could be recorded"
+        )
+
+    data = json.loads(path.read_text())
+
+    data["txid"] = str(txid)
+    data["vout"] = int(vout)
+
+    tmp = path.with_name(path.name + ".tmp")
+
+    with open(tmp, "w") as f:
+        json.dump(
+            data,
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+    os.replace(tmp, path)
+
+
+def locate_wallet_payment_output(
+    cli,
+    wallet,
+    txid,
+    address,
+    amount,
+    *,
+    sats=False,
+):
+    """
+    Decode one exact wallet transaction and return the expected
+    funding output index plus its current blockhash, if confirmed.
+    """
+    wallet_tx = cli(
+        "gettransaction",
+        txid,
+        wallet=wallet,
+    )
+
+    raw_hex = wallet_tx.get("hex")
+
+    if not raw_hex:
+        raise RuntimeError(
+            "Wallet transaction has no raw hex"
+        )
+
+    decoded = cli(
+        "decoderawtransaction",
+        raw_hex,
+    )
+
+    for output in decoded.get("vout", []):
+        actual_address = (
+            output
+            .get("scriptPubKey", {})
+            .get("address")
+        )
+
+        if actual_address != address:
+            continue
+
+        if sats:
+            observed = int(
+                Decimal(str(output["value"]))
+                * Decimal(100_000_000)
+            )
+            expected = int(amount)
+        else:
+            observed = Decimal(
+                str(output["value"])
+            )
+            expected = Decimal(
+                str(amount)
+            )
+
+        if observed != expected:
+            continue
+
+        return (
+            int(output["n"]),
+            wallet_tx.get("blockhash"),
+        )
+
+    raise RuntimeError(
+        "Could not locate expected HTLC funding output "
+        "in exact wallet transaction"
+    )
 
 
 def clear_funding_intent(swap_id, chain):
@@ -1542,24 +1838,19 @@ def recover_blake_funding(swap, address):
 
     txid, vout, blockhash = found
 
-    if not blockhash:
-        if not AUTO_MINE:
-            return txid, vout, None
-
+    if not blockhash and auto_mine_enabled():
         mine_blake(1)
+
         tx = blake_cli(
             "gettransaction",
             txid,
             wallet=BLAKE_WALLET,
         )
+
         blockhash = tx.get("blockhash")
 
-        if not blockhash:
-            raise RuntimeError(
-                "Recovered BLAKE funding transaction "
-                "but could not confirm it"
-            )
-
+    # In production an exact wallet payment may legitimately
+    # be pending. Return it without pretending it is confirmed.
     return txid, vout, blockhash
 
 
@@ -1577,24 +1868,19 @@ def recover_btc_funding(swap, address):
 
     txid, vout, blockhash = found
 
-    if not blockhash:
-        if not AUTO_MINE:
-            return txid, vout, None
-
+    if not blockhash and auto_mine_enabled():
         mine_btc(1)
+
         tx = btc_cli(
             "gettransaction",
             txid,
             wallet=BTC_WALLET,
         )
+
         blockhash = tx.get("blockhash")
 
-        if not blockhash:
-            raise RuntimeError(
-                "Recovered BTC funding transaction "
-                "but could not confirm it"
-            )
-
+    # Production recovery may find the exact payment while it
+    # is still in the mempool. Do not advance durable state yet.
     return txid, vout, blockhash
 
 
@@ -1802,6 +2088,12 @@ def command_fund_blake(args):
         role="alice",
     )
 
+    require_local_protocol_role(
+        swap,
+        "alice",
+        "BLAKE funding",
+    )
+
     if State(swap.state) != State.OFFERED:
         raise ValueError(
             "fund-blake requires swap state OFFERED"
@@ -1889,82 +2181,62 @@ def command_fund_blake(args):
             wallet=BLAKE_WALLET,
         )
 
-        if AUTO_MINE:
-            blockhash = mine_blake(1)[0]
-
-            tx = blake_cli(
-                "getrawtransaction",
+        contract_vout, blockhash = (
+            locate_wallet_payment_output(
+                blake_cli,
+                BLAKE_WALLET,
                 txid,
-                True,
-                blockhash,
-            )
-
-            contract_vout = None
-
-            for output in tx["vout"]:
-                actual_address = (
-                    output
-                    .get("scriptPubKey", {})
-                    .get("address")
-                )
-
-                if (
-                    abs(
-                        output["value"]
-                        - swap.blake_amount
-                    ) < 0.00000001
-                    and actual_address == address
-                ):
-                    contract_vout = output["n"]
-                    break
-
-            if contract_vout is None:
-                raise RuntimeError(
-                    "Could not locate BLAKE contract output"
-                )
-        else:
-            pending = recover_blake_funding(
-                swap,
                 address,
+                swap.blake_amount,
+            )
+        )
+
+        record_funding_broadcast(
+            swap.swap_id,
+            "blake",
+            txid,
+            contract_vout,
+        )
+
+        if not blockhash and auto_mine_enabled():
+            mine_blake(1)
+
+            wallet_tx = blake_cli(
+                "gettransaction",
+                txid,
+                wallet=BLAKE_WALLET,
             )
 
-            if pending is None:
-                raise RuntimeError(
-                    "BLAKE funding was broadcast but could "
-                    "not be recovered from the wallet"
-                )
+            blockhash = wallet_tx.get("blockhash")
 
-            recovered_txid, contract_vout, blockhash = pending
+    # Whether freshly broadcast or crash-recovered, retain the
+    # exact broadcast identity in the durable intent until the
+    # transaction is actually confirmed.
+    record_funding_broadcast(
+        swap.swap_id,
+        "blake",
+        txid,
+        contract_vout,
+    )
 
-            if recovered_txid != txid:
-                raise RuntimeError(
-                    "Recovered BLAKE funding txid does not "
-                    "match the transaction just broadcast"
-                )
+    if not blockhash:
+        print()
+        print("BLAKE FUNDING BROADCAST")
+        print("=======================")
+        print("txid:  ", txid)
+        print("vout:  ", contract_vout)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "BLAKE funding is awaiting "
+            "active-chain confirmation."
+        )
+        return
 
     swap.blake_funding_txid = txid
     swap.blake_funding_vout = contract_vout
     swap.blake_funding_blockhash = blockhash
-
-    if not blockhash:
-        save_swap(
-            swap,
-            role="alice",
-        )
-
-        print()
-        print("BLAKE FUNDING BROADCAST")
-        print("=======================")
-        print("txid:   ", txid)
-        print("vout:   ", contract_vout)
-        print("block:   pending")
-        print("state:  ", swap.state)
-        print()
-        print(
-            "Awaiting normal BLAKE chain confirmation; "
-            "funding intent remains active."
-        )
-        return
 
     swap.transition(
         State.BLAKE_FUNDED
@@ -4107,6 +4379,12 @@ def command_receive_blake_funded(args):
         role="bob",
     )
 
+    require_local_protocol_role(
+        swap,
+        "bob",
+        "BLAKE funding receipt",
+    )
+
     message, path = receive_message(
         args.swap_id,
         "blake-funded",
@@ -4586,6 +4864,12 @@ def command_fund_btc(args):
         role="bob",
     )
 
+    require_local_protocol_role(
+        swap,
+        "bob",
+        "BTC funding",
+    )
+
     if not swap.btc_alice_pub:
         raise ValueError(
             "Bob has no Bitcoin Alice pubkey"
@@ -4672,84 +4956,60 @@ def command_fund_btc(args):
             wallet=BTC_WALLET,
         )
 
-        if AUTO_MINE:
-            blockhash = mine_btc(1)[0]
-
-            tx = btc_cli(
-                "getrawtransaction",
+        contract_vout, blockhash = (
+            locate_wallet_payment_output(
+                btc_cli,
+                BTC_WALLET,
                 txid,
-                True,
-                blockhash,
-            )
-
-            contract_vout = None
-
-            for output in tx["vout"]:
-                value_sats = int(
-                    Decimal(str(output["value"]))
-                    * Decimal(100_000_000)
-                )
-
-                actual_address = (
-                    output
-                    .get("scriptPubKey", {})
-                    .get("address")
-                )
-
-                if (
-                    value_sats == swap.btc_sats
-                    and actual_address == address
-                ):
-                    contract_vout = output["n"]
-                    break
-
-            if contract_vout is None:
-                raise RuntimeError(
-                    "Could not locate Bitcoin HTLC output"
-                )
-        else:
-            pending = recover_btc_funding(
-                swap,
                 address,
+                swap.btc_sats,
+                sats=True,
+            )
+        )
+
+        record_funding_broadcast(
+            swap.swap_id,
+            "btc",
+            txid,
+            contract_vout,
+        )
+
+        if not blockhash and auto_mine_enabled():
+            mine_btc(1)
+
+            wallet_tx = btc_cli(
+                "gettransaction",
+                txid,
+                wallet=BTC_WALLET,
             )
 
-            if pending is None:
-                raise RuntimeError(
-                    "BTC funding was broadcast but could "
-                    "not be recovered from the wallet"
-                )
+            blockhash = wallet_tx.get("blockhash")
 
-            recovered_txid, contract_vout, blockhash = pending
+    record_funding_broadcast(
+        swap.swap_id,
+        "btc",
+        txid,
+        contract_vout,
+    )
 
-            if recovered_txid != txid:
-                raise RuntimeError(
-                    "Recovered BTC funding txid does not "
-                    "match the transaction just broadcast"
-                )
+    if not blockhash:
+        print()
+        print("BITCOIN FUNDING BROADCAST")
+        print("=========================")
+        print("txid:  ", txid)
+        print("vout:  ", contract_vout)
+        print("block:  pending")
+        print("state: ", swap.state)
+        print()
+        print(
+            "Bitcoin funding is awaiting "
+            "active-chain confirmation."
+        )
+        return
 
     swap.btc_funding_txid = txid
     swap.btc_funding_vout = contract_vout
     swap.btc_funding_blockhash = blockhash
-
-    if not blockhash:
-        save_swap(
-            swap,
-            role="bob",
-        )
-
-        print()
-        print("BTC FUNDING BROADCAST")
-        print("=====================")
-        print("txid:  ", txid)
-        print("vout:  ", contract_vout)
-        print("block:   pending")
-        print("state: ", swap.state)
-        print()
-        print(
-            "Awaiting normal Bitcoin confirmation; "
-            "funding intent remains active."
-        )
-        return
 
     swap.transition(
         State.BTC_FUNDED
@@ -4825,6 +5085,12 @@ def command_receive_btc_funded(args):
     swap = load_swap(
         args.swap_id,
         role="alice",
+    )
+
+    require_local_protocol_role(
+        swap,
+        "alice",
+        "BTC funding receipt",
     )
 
     message, path = receive_message(
@@ -5303,12 +5569,177 @@ def verify_confirmed_btc_claim_for_blake(swap):
     return True
 
 
+def _coin_decimal_to_sats(value):
+    value = Decimal(str(value))
+    sats = value * Decimal(100_000_000)
+
+    if sats != sats.to_integral_value():
+        raise ValueError(
+            f"amount has sub-satoshi precision: {value}"
+        )
+
+    return int(sats)
+
+
+def _sats_to_coin_decimal(value):
+    return (
+        Decimal(int(value))
+        / Decimal(100_000_000)
+    )
+
+
+def _decoded_tx_vsize(cli, tx_hex):
+    decoded = cli(
+        "decoderawtransaction",
+        tx_hex,
+    )
+
+    vsize = int(decoded.get("vsize", 0))
+
+    if vsize < 1:
+        raise RuntimeError(
+            "finalized transaction has invalid vsize"
+        )
+
+    return vsize
+
+
+def _decoded_spend_fee_sats(
+    cli,
+    tx_hex,
+    input_sats,
+):
+    decoded = cli(
+        "decoderawtransaction",
+        tx_hex,
+    )
+
+    output_sats = 0
+
+    for output in decoded.get("vout", []):
+        output_sats += _coin_decimal_to_sats(
+            output["value"]
+        )
+
+    fee_sats = int(input_sats) - output_sats
+
+    if fee_sats < 1:
+        raise RuntimeError(
+            "finalized settlement transaction "
+            "does not pay a positive fee"
+        )
+
+    return fee_sats
+
+
+def build_dynamic_settlement_spend(
+    *,
+    chain,
+    cli,
+    input_sats,
+    build_finalized,
+):
+    """
+    Build a finalized HTLC spend whose actual vsize agrees with
+    the selected fee policy.
+
+    build_finalized(fee_sats) must return fully finalized raw hex.
+    It must not broadcast.
+    """
+    input_sats = int(input_sats)
+
+    override = settlement_fee_override_sats(chain)
+
+    if override is not None:
+        enforce_fee_cap(
+            override,
+            input_sats,
+            max_percent=settlement_fee_cap_percent(),
+        )
+
+        tx_hex = build_finalized(override)
+        vsize = _decoded_tx_vsize(cli, tx_hex)
+
+        return {
+            "hex": tx_hex,
+            "fee_sats": override,
+            "vsize": vsize,
+            "rate_sat_vb": (
+                Decimal(override)
+                / Decimal(vsize)
+            ),
+            "source": "override",
+        }
+
+    estimate = cli(
+        "estimatesmartfee",
+        settlement_fee_target_blocks(),
+    )
+
+    mempool = cli(
+        "getmempoolinfo"
+    )
+
+    rate = choose_fee_rate_sat_vb(
+        estimate,
+        mempool,
+        multiplier=settlement_fee_multiplier(),
+    )
+
+    # Start deliberately small. The provisional transaction is
+    # never broadcast; it exists only to measure the real witness.
+    fee_sats = 1
+
+    for _attempt in range(8):
+        enforce_fee_cap(
+            fee_sats,
+            input_sats,
+            max_percent=settlement_fee_cap_percent(),
+        )
+
+        tx_hex = build_finalized(fee_sats)
+        vsize = _decoded_tx_vsize(cli, tx_hex)
+
+        required_fee = fee_for_vsize(
+            vsize,
+            rate,
+        )
+
+        enforce_fee_cap(
+            required_fee,
+            input_sats,
+            max_percent=settlement_fee_cap_percent(),
+        )
+
+        if required_fee == fee_sats:
+            return {
+                "hex": tx_hex,
+                "fee_sats": fee_sats,
+                "vsize": vsize,
+                "rate_sat_vb": rate,
+                "source": "dynamic",
+            }
+
+        fee_sats = required_fee
+
+    raise RuntimeError(
+        "Settlement fee/vsize did not converge "
+        "after 8 signing attempts"
+    )
+
+
 @serialized_funding("blake")
 def command_claim_blake(args):
 
     swap = load_swap(
         args.swap_id,
         role="bob",
+    )
+
+    require_local_protocol_role(
+        swap,
+        "bob",
+        "BLAKE claim",
     )
 
 
@@ -5348,6 +5779,15 @@ def command_claim_blake(args):
         "claim",
     )
 
+    if recovered == "pending":
+        print()
+        print("BLAKE CLAIM PENDING")
+        print("===================")
+        print("txid:  ", swap.blake_claim_txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        return
+
     if recovered is not None:
         swap.blake_claim_txid = recovered["txid"]
         swap.blake_claim_blockhash = recovered["blockhash"]
@@ -5385,74 +5825,90 @@ def command_claim_blake(args):
         wallet=BLAKE_WALLET,
     )
 
-    fee = Decimal("0.00010000")
     amount = Decimal(
         str(swap.blake_amount)
     )
+    input_sats = _coin_decimal_to_sats(amount)
 
-    output_amount = amount - fee
+    def build_claim_with_fee(fee_sats):
+        if fee_sats >= input_sats:
+            raise ValueError(
+                "BLAKE amount is too small for claim fee"
+            )
 
-    if output_amount <= 0:
-        raise ValueError(
-            "BLAKE amount is too small for claim fee"
+        output_sats = input_sats - fee_sats
+        output_amount = _sats_to_coin_decimal(
+            output_sats
         )
 
-    raw = blake_cli(
-        "createrawtransaction",
-        json.dumps([
-            {
-                "txid": swap.blake_funding_txid,
-                "vout": swap.blake_funding_vout,
-            }
-        ]),
-        json.dumps({
-            destination: float(output_amount)
-        }),
-    )
-
-    psbt = blake_cli(
-        "converttopsbt",
-        raw,
-    )
-
-    psbt = blake_cli(
-        "utxoupdatepsbt",
-        psbt,
-        json.dumps([desc]),
-    )
-
-    signed = blake_cli(
-        "walletprocesspsbt",
-        psbt,
-        True,
-        "ALL",
-        True,
-        False,
-        wallet=BLAKE_WALLET,
-    )
-
-    signed_psbt = signed["psbt"]
-
-    # CRITICAL:
-    # This uses the secret Bob extracted from Bitcoin.
-    # It does NOT use swap.secret_hex.
-    with_secret = add_sha256_preimage(
-        signed_psbt,
-        swap.secret_hash,
-        swap.revealed_secret_hex,
-    )
-
-    finalized = blake_cli(
-        "finalizepsbt",
-        with_secret,
-    )
-
-    if not finalized.get("complete"):
-        raise RuntimeError(
-            "BLAKE claim PSBT did not finalize"
+        raw = blake_cli(
+            "createrawtransaction",
+            json.dumps([
+                {
+                    "txid": swap.blake_funding_txid,
+                    "vout": swap.blake_funding_vout,
+                }
+            ]),
+            json.dumps({
+                destination: float(output_amount)
+            }),
         )
 
-    claim_hex = finalized["hex"]
+        psbt = blake_cli(
+            "converttopsbt",
+            raw,
+        )
+
+        psbt = blake_cli(
+            "utxoupdatepsbt",
+            psbt,
+            json.dumps([desc]),
+        )
+
+        signed = blake_cli(
+            "walletprocesspsbt",
+            psbt,
+            True,
+            "ALL",
+            True,
+            False,
+            wallet=BLAKE_WALLET,
+        )
+
+        # CRITICAL:
+        # This uses the secret Bob extracted from Bitcoin.
+        # It does NOT use swap.secret_hex.
+        with_secret = add_sha256_preimage(
+            signed["psbt"],
+            swap.secret_hash,
+            swap.revealed_secret_hex,
+        )
+
+        finalized = blake_cli(
+            "finalizepsbt",
+            with_secret,
+        )
+
+        if not finalized.get("complete"):
+            raise RuntimeError(
+                "BLAKE claim PSBT did not finalize"
+            )
+
+        return finalized["hex"]
+
+    fee_plan = build_dynamic_settlement_spend(
+        chain="blake",
+        cli=blake_cli,
+        input_sats=input_sats,
+        build_finalized=build_claim_with_fee,
+    )
+
+    claim_hex = fee_plan["hex"]
+    fee_sats = fee_plan["fee_sats"]
+    fee = _sats_to_coin_decimal(fee_sats)
+    output_amount = _sats_to_coin_decimal(
+        input_sats - fee_sats
+    )
 
     print()
     print("BLAKE CLAIM READY")
@@ -5460,6 +5916,13 @@ def command_claim_blake(args):
     print("input: ", amount, "BLAKE")
     print("output:", output_amount, "BLAKE")
     print("fee:   ", fee, "BLAKE")
+    print("vsize: ", fee_plan["vsize"], "vB")
+    print(
+        "rate:  ",
+        fee_plan["rate_sat_vb"],
+        "sat/vB",
+    )
+    print("source:", fee_plan["source"])
     print()
 
     txid = blake_cli(
@@ -5467,24 +5930,33 @@ def command_claim_blake(args):
         claim_hex,
     )
 
-    if not AUTO_MINE:
-        # The BLAKE spend is not authoritative protocol state until
-        # it confirms on the active chain. Persist the txid for
-        # restart/recovery, but remain BTC_CLAIMED while pending.
-        swap.blake_claim_txid = txid
-        swap.blake_claim_blockhash = None
+    # Persist exact broadcast identity before any crash point.
+    # Durable protocol state remains BTC_CLAIMED until the
+    # exact claim is confirmed on the active BLAKE chain.
+    swap.blake_claim_txid = txid
+    swap.blake_claim_blockhash = None
 
-        save_swap(
-            swap,
-            role="bob",
-        )
+    save_swap(
+        swap,
+        role="bob",
+    )
 
-        _test_crash_after_broadcast("blake-claim-after-broadcast")
+    _test_crash_after_broadcast("blake-claim-after-broadcast")
 
-        protocol_failpoint(
-            "after_blake_claim_broadcast"
-        )
+    protocol_failpoint(
+        "after_blake_claim_broadcast"
+    )
 
+    if auto_mine_enabled():
+        mine_blake(1)
+
+    recovered = require_recovered_branch(
+        swap,
+        "blake",
+        "claim",
+    )
+
+    if recovered == "pending":
         print()
         print("BLAKE CLAIM BROADCAST")
         print("=====================")
@@ -5493,20 +5965,19 @@ def command_claim_blake(args):
         print("state: ", swap.state)
         print()
         print(
-            "BLAKE claim is awaiting active-chain confirmation."
+            "BLAKE claim is awaiting "
+            "active-chain confirmation."
         )
         return
 
-    _test_crash_after_broadcast("blake-claim-after-broadcast")
+    if recovered is None:
+        raise RuntimeError(
+            "BLAKE claim broadcast is neither pending "
+            "nor confirmed"
+        )
 
-    protocol_failpoint(
-        "after_blake_claim_broadcast"
-    )
-
-    blockhash = mine_blake(1)[0]
-
-    swap.blake_claim_txid = txid
-    swap.blake_claim_blockhash = blockhash
+    swap.blake_claim_txid = recovered["txid"]
+    swap.blake_claim_blockhash = recovered["blockhash"]
 
     swap.transition(
         State.BLAKE_CLAIMED
@@ -5520,7 +5991,7 @@ def command_claim_blake(args):
     print("BLAKE CLAIMED")
     print("=============")
     print("txid:  ", txid)
-    print("block: ", blockhash)
+    print("block: ", swap.blake_claim_blockhash)
     print("state: ", swap.state)
 
     # Final sanity check: original HTLC must now be spent.
@@ -5627,6 +6098,12 @@ def command_refund_blake(args):
         role="alice",
     )
 
+    require_local_protocol_role(
+        swap,
+        "alice",
+        "BLAKE refund",
+    )
+
     if State(swap.state) not in {
         State.BLAKE_FUNDED,
         State.BTC_REFUNDED,
@@ -5663,16 +6140,16 @@ def command_refund_blake(args):
         "refund",
     )
 
-    if recovered is not None:
-        if (
-            swap.blake_refund_txid is not None
-            and swap.blake_refund_txid != recovered["txid"]
-        ):
-            raise RuntimeError(
-                "SECURITY FAILURE: confirmed BLAKE refund txid "
-                "differs from the pending refund we broadcast"
-            )
+    if recovered == "pending":
+        print()
+        print("BLAKE REFUND PENDING")
+        print("====================")
+        print("txid:  ", swap.blake_refund_txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        return
 
+    if recovered is not None:
         swap.blake_refund_txid = recovered["txid"]
         swap.blake_refund_blockhash = recovered["blockhash"]
 
@@ -5749,14 +6226,8 @@ def command_refund_blake(args):
         "getblockcount"
     )
 
-    fee = Decimal("0.00010000")
     amount = Decimal(str(swap.blake_amount))
-    output_amount = amount - fee
-
-    if output_amount <= 0:
-        raise ValueError(
-            "BLAKE amount is too small for refund fee"
-        )
+    input_sats = _coin_decimal_to_sats(amount)
 
     refund_path = (
         BASE_SWAP_DIR
@@ -5769,6 +6240,31 @@ def command_refund_blake(args):
     #
     if refund_path.exists():
         refund_hex = refund_path.read_text().strip()
+
+        fee_sats = _decoded_spend_fee_sats(
+            blake_cli,
+            refund_hex,
+            input_sats,
+        )
+
+        fee_plan = {
+            "hex": refund_hex,
+            "fee_sats": fee_sats,
+            "vsize": _decoded_tx_vsize(
+                blake_cli,
+                refund_hex,
+            ),
+            "rate_sat_vb": (
+                Decimal(fee_sats)
+                / Decimal(
+                    _decoded_tx_vsize(
+                        blake_cli,
+                        refund_hex,
+                    )
+                )
+            ),
+            "source": "saved",
+        }
 
         print()
         print("Reusing saved signed BLAKE refund:")
@@ -5792,49 +6288,69 @@ def command_refund_blake(args):
             }
         ]
 
-        outputs = {
-            destination: float(output_amount)
-        }
+        def build_refund_with_fee(fee_sats):
+            if fee_sats >= input_sats:
+                raise ValueError(
+                    "BLAKE amount is too small for refund fee"
+                )
 
-        raw = blake_cli(
-            "createrawtransaction",
-            json.dumps(inputs),
-            json.dumps(outputs),
-            swap.blake_timeout,
-        )
-
-        psbt = blake_cli(
-            "converttopsbt",
-            raw,
-        )
-
-        psbt = blake_cli(
-            "utxoupdatepsbt",
-            psbt,
-            json.dumps([desc]),
-        )
-
-        signed = blake_cli(
-            "walletprocesspsbt",
-            psbt,
-            True,
-            "ALL",
-            True,
-            False,
-            wallet=BLAKE_WALLET,
-        )
-
-        finalized = blake_cli(
-            "finalizepsbt",
-            signed["psbt"],
-        )
-
-        if not finalized.get("complete"):
-            raise RuntimeError(
-                "BLAKE refund PSBT did not finalize"
+            output_sats = input_sats - fee_sats
+            output_amount = _sats_to_coin_decimal(
+                output_sats
             )
 
-        refund_hex = finalized["hex"]
+            outputs = {
+                destination: float(output_amount)
+            }
+
+            raw = blake_cli(
+                "createrawtransaction",
+                json.dumps(inputs),
+                json.dumps(outputs),
+                swap.blake_timeout,
+            )
+
+            psbt = blake_cli(
+                "converttopsbt",
+                raw,
+            )
+
+            psbt = blake_cli(
+                "utxoupdatepsbt",
+                psbt,
+                json.dumps([desc]),
+            )
+
+            signed = blake_cli(
+                "walletprocesspsbt",
+                psbt,
+                True,
+                "ALL",
+                True,
+                False,
+                wallet=BLAKE_WALLET,
+            )
+
+            finalized = blake_cli(
+                "finalizepsbt",
+                signed["psbt"],
+            )
+
+            if not finalized.get("complete"):
+                raise RuntimeError(
+                    "BLAKE refund PSBT did not finalize"
+                )
+
+            return finalized["hex"]
+
+        fee_plan = build_dynamic_settlement_spend(
+            chain="blake",
+            cli=blake_cli,
+            input_sats=input_sats,
+            build_finalized=build_refund_with_fee,
+        )
+
+        refund_hex = fee_plan["hex"]
 
         refund_path.write_text(
             refund_hex + "\n"
@@ -5849,9 +6365,22 @@ def command_refund_blake(args):
     print("==================")
     print("current height:", current_height)
     print("refund height: ", swap.blake_timeout)
+    fee_sats = fee_plan["fee_sats"]
+    fee = _sats_to_coin_decimal(fee_sats)
+    output_amount = _sats_to_coin_decimal(
+        input_sats - fee_sats
+    )
+
     print("input:         ", amount, "BLAKE")
     print("output:        ", output_amount, "BLAKE")
     print("fee:           ", fee, "BLAKE")
+    print("vsize:         ", fee_plan["vsize"], "vB")
+    print(
+        "rate:          ",
+        fee_plan["rate_sat_vb"],
+        "sat/vB",
+    )
+    print("fee source:    ", fee_plan["source"])
 
     if current_height < swap.blake_timeout:
         print()
@@ -5863,25 +6392,33 @@ def command_refund_blake(args):
         refund_hex,
     )
 
-    if not AUTO_MINE:
-        # Broadcasting a mature refund does not make it authoritative
-        # protocol state. Persist the transaction identity for
-        # restart/recovery, but keep the current pre-confirmation
-        # state until the refund confirms on the active BLAKE chain.
-        swap.blake_refund_txid = txid
-        swap.blake_refund_blockhash = None
+    # Persist exact broadcast identity before any crash point.
+    # Durable protocol state remains unchanged until the
+    # exact refund is confirmed on the active BLAKE chain.
+    swap.blake_refund_txid = txid
+    swap.blake_refund_blockhash = None
 
-        save_swap(
-            swap,
-            role="alice",
-        )
+    save_swap(
+        swap,
+        role="alice",
+    )
 
-        _test_crash_after_broadcast("blake-refund-after-broadcast")
+    _test_crash_after_broadcast("blake-refund-after-broadcast")
 
-        protocol_failpoint(
-            "after_blake_refund_broadcast"
-        )
+    protocol_failpoint(
+        "after_blake_refund_broadcast"
+    )
 
+    if auto_mine_enabled():
+        mine_blake(1)
+
+    recovered = require_recovered_branch(
+        swap,
+        "blake",
+        "refund",
+    )
+
+    if recovered == "pending":
         print()
         print("BLAKE REFUND BROADCAST")
         print("======================")
@@ -5890,20 +6427,19 @@ def command_refund_blake(args):
         print("state: ", swap.state)
         print()
         print(
-            "BLAKE refund is awaiting active-chain confirmation."
+            "BLAKE refund is awaiting "
+            "active-chain confirmation."
         )
         return
 
-    _test_crash_after_broadcast("blake-refund-after-broadcast")
+    if recovered is None:
+        raise RuntimeError(
+            "BLAKE refund broadcast is neither pending "
+            "nor confirmed"
+        )
 
-    protocol_failpoint(
-        "after_blake_refund_broadcast"
-    )
-
-    blockhash = mine_blake(1)[0]
-
-    swap.blake_refund_txid = txid
-    swap.blake_refund_blockhash = blockhash
+    swap.blake_refund_txid = recovered["txid"]
+    swap.blake_refund_blockhash = recovered["blockhash"]
 
     swap.transition(
         State.BLAKE_REFUNDED
@@ -5918,7 +6454,7 @@ def command_refund_blake(args):
     print("BLAKE REFUNDED")
     print("==============")
     print("txid:  ", txid)
-    print("block: ", blockhash)
+    print("block: ", swap.blake_refund_blockhash)
     print("state: ", swap.state)
 
 def command_receive_btc_refunded(args):
@@ -6275,6 +6811,12 @@ def command_receive_btc_claimed(args):
 def command_claim_btc(args):
     swap = load_swap(args.swap_id, role="alice")
 
+    require_local_protocol_role(
+        swap,
+        "alice",
+        "BTC claim",
+    )
+
     if State(swap.state) != State.BTC_FUNDED:
         raise ValueError(
             "claim-btc requires state BTC_FUNDED"
@@ -6285,6 +6827,15 @@ def command_claim_btc(args):
         "btc",
         "claim",
     )
+
+    if recovered == "pending":
+        print()
+        print("BTC CLAIM PENDING")
+        print("=================")
+        print("txid:  ", swap.btc_claim_txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        return
 
     if recovered is not None:
         swap.btc_claim_txid = recovered["txid"]
@@ -6318,23 +6869,6 @@ def command_claim_btc(args):
         verbose=True,
     )
 
-    fee_sats = int(
-        os.environ.get(
-            "BLAKE_SWAP_BTC_SPEND_FEE_SATS",
-            "1000",
-        )
-    )
-
-    if fee_sats < 1:
-        raise ValueError(
-            "BLAKE_SWAP_BTC_SPEND_FEE_SATS must be >= 1"
-        )
-
-    if swap.btc_sats <= fee_sats:
-        raise ValueError(
-            "BTC amount is too small for claim fee"
-        )
-
     desc = get_btc_contract_descriptor(swap)
 
     destination = btc_cli(
@@ -6344,66 +6878,81 @@ def command_claim_btc(args):
         wallet=BTC_WALLET,
     )
 
-    output_sats = swap.btc_sats - fee_sats
+    input_sats = int(swap.btc_sats)
 
-    output_btc = (
-        Decimal(output_sats)
-        / Decimal(100_000_000)
-    )
+    def build_claim_with_fee(fee_sats):
+        if fee_sats >= input_sats:
+            raise ValueError(
+                "BTC amount is too small for claim fee"
+            )
 
-    raw = btc_cli(
-        "createrawtransaction",
-        json.dumps([
-            {
-                "txid": swap.btc_funding_txid,
-                "vout": swap.btc_funding_vout,
-            }
-        ]),
-        json.dumps({
-            destination: float(output_btc)
-        }),
-    )
-
-    psbt = btc_cli(
-        "converttopsbt",
-        raw,
-    )
-
-    psbt = btc_cli(
-        "utxoupdatepsbt",
-        psbt,
-        json.dumps([desc]),
-    )
-
-    signed = btc_cli(
-        "walletprocesspsbt",
-        psbt,
-        True,
-        "ALL",
-        True,
-        False,
-        wallet=BTC_WALLET,
-    )
-
-    signed_psbt = signed["psbt"]
-
-    with_secret = add_sha256_preimage(
-        signed_psbt,
-        swap.secret_hash,
-        swap.secret_hex,
-    )
-
-    finalized = btc_cli(
-        "finalizepsbt",
-        with_secret,
-    )
-
-    if not finalized.get("complete"):
-        raise RuntimeError(
-            "Bitcoin claim PSBT did not finalize"
+        output_sats = input_sats - fee_sats
+        output_btc = _sats_to_coin_decimal(
+            output_sats
         )
 
-    claim_hex = finalized["hex"]
+        raw = btc_cli(
+            "createrawtransaction",
+            json.dumps([
+                {
+                    "txid": swap.btc_funding_txid,
+                    "vout": swap.btc_funding_vout,
+                }
+            ]),
+            json.dumps({
+                destination: float(output_btc)
+            }),
+        )
+
+        psbt = btc_cli(
+            "converttopsbt",
+            raw,
+        )
+
+        psbt = btc_cli(
+            "utxoupdatepsbt",
+            psbt,
+            json.dumps([desc]),
+        )
+
+        signed = btc_cli(
+            "walletprocesspsbt",
+            psbt,
+            True,
+            "ALL",
+            True,
+            False,
+            wallet=BTC_WALLET,
+        )
+
+        with_secret = add_sha256_preimage(
+            signed["psbt"],
+            swap.secret_hash,
+            swap.secret_hex,
+        )
+
+        finalized = btc_cli(
+            "finalizepsbt",
+            with_secret,
+        )
+
+        if not finalized.get("complete"):
+            raise RuntimeError(
+                "Bitcoin claim PSBT did not finalize"
+            )
+
+        return finalized["hex"]
+
+    fee_plan = build_dynamic_settlement_spend(
+        chain="btc",
+        cli=btc_cli,
+        input_sats=input_sats,
+        build_finalized=build_claim_with_fee,
+    )
+
+    claim_hex = fee_plan["hex"]
+    fee_sats = fee_plan["fee_sats"]
+    output_sats = input_sats - fee_sats
 
     print()
     print("BTC CLAIM READY")
@@ -6411,6 +6960,13 @@ def command_claim_btc(args):
     print("input sats: ", swap.btc_sats)
     print("output sats:", output_sats)
     print("fee sats:   ", fee_sats)
+    print("vsize:      ", fee_plan["vsize"], "vB")
+    print(
+        "rate:       ",
+        fee_plan["rate_sat_vb"],
+        "sat/vB",
+    )
+    print("fee source:  ", fee_plan["source"])
     print()
 
     txid = btc_cli(
@@ -6418,24 +6974,33 @@ def command_claim_btc(args):
         claim_hex,
     )
 
-    if not AUTO_MINE:
-        # A mempool claim reveals S publicly, but it is NOT yet
-        # authoritative protocol state. Persist only the broadcast
-        # txid so restart/recovery can identify what Alice sent.
-        swap.btc_claim_txid = txid
-        swap.btc_claim_blockhash = None
+    # Broadcasting exposes S in the Bitcoin mempool, but that
+    # is not yet confirmed settlement truth. Persist only the
+    # exact transaction identity; keep durable state BTC_FUNDED.
+    swap.btc_claim_txid = txid
+    swap.btc_claim_blockhash = None
 
-        save_swap(
-            swap,
-            role="alice",
-        )
+    save_swap(
+        swap,
+        role="alice",
+    )
 
-        _test_crash_after_broadcast("btc-claim-after-broadcast")
+    _test_crash_after_broadcast("btc-claim-after-broadcast")
 
-        protocol_failpoint(
-            "after_btc_claim_broadcast"
-        )
+    protocol_failpoint(
+        "after_btc_claim_broadcast"
+    )
 
+    if auto_mine_enabled():
+        mine_btc(1)
+
+    recovered = require_recovered_branch(
+        swap,
+        "btc",
+        "claim",
+    )
+
+    if recovered == "pending":
         print()
         print("BTC CLAIM BROADCAST")
         print("===================")
@@ -6444,25 +7009,22 @@ def command_claim_btc(args):
         print("state: ", swap.state)
         print()
         print(
-            "Secret S is now visible in the Bitcoin mempool, "
-            "but protocol state will not advance until the claim "
-            "is confirmed on the active chain."
+            "Bitcoin claim is awaiting "
+            "active-chain confirmation."
         )
         return
 
-    _test_crash_after_broadcast("btc-claim-after-broadcast")
+    if recovered is None:
+        raise RuntimeError(
+            "Bitcoin claim broadcast is neither pending "
+            "nor confirmed"
+        )
 
-    protocol_failpoint(
-        "after_btc_claim_broadcast"
-    )
+    swap.btc_claim_txid = recovered["txid"]
+    swap.btc_claim_blockhash = recovered["blockhash"]
 
-    blockhash = mine_btc(1)[0]
-
-    swap.btc_claim_txid = txid
-    swap.btc_claim_blockhash = blockhash
-
-    # The successful spend both reveals S
-    # and constitutes Alice's BTC claim.
+    # Only confirmed Bitcoin settlement advances the durable
+    # protocol state through SECRET_REVEALED -> BTC_CLAIMED.
     swap.transition(
         State.SECRET_REVEALED
     )
@@ -6479,12 +7041,18 @@ def command_claim_btc(args):
     print("BTC CLAIMED")
     print("===========")
     print("txid:  ", txid)
-    print("block: ", blockhash)
+    print("block: ", swap.btc_claim_blockhash)
     print("state: ", swap.state)
 
 @serialized_funding("btc")
 def command_refund_btc(args):
     swap = load_swap(args.swap_id,role="bob")
+
+    require_local_protocol_role(
+        swap,
+        "bob",
+        "BTC refund",
+    )
 
     if State(swap.state) != State.BTC_FUNDED:
         raise ValueError(
@@ -6507,16 +7075,16 @@ def command_refund_btc(args):
         "refund",
     )
 
-    if recovered is not None:
-        if (
-            swap.btc_refund_txid is not None
-            and swap.btc_refund_txid != recovered["txid"]
-        ):
-            raise RuntimeError(
-                "SECURITY FAILURE: confirmed Bitcoin refund txid "
-                "differs from the pending refund we broadcast"
-            )
+    if recovered == "pending":
+        print()
+        print("BTC REFUND PENDING")
+        print("==================")
+        print("txid:  ", swap.btc_refund_txid)
+        print("block:  pending")
+        print("state: ", swap.state)
+        return
 
+    if recovered is not None:
         swap.btc_refund_txid = recovered["txid"]
         swap.btc_refund_blockhash = recovered["blockhash"]
 
@@ -6557,6 +7125,30 @@ def command_refund_btc(args):
     if refund_path.exists():
         refund_hex = refund_path.read_text().strip()
 
+        input_sats = int(swap.btc_sats)
+
+        fee_sats = _decoded_spend_fee_sats(
+            btc_cli,
+            refund_hex,
+            input_sats,
+        )
+
+        vsize = _decoded_tx_vsize(
+            btc_cli,
+            refund_hex,
+        )
+
+        fee_plan = {
+            "hex": refund_hex,
+            "fee_sats": fee_sats,
+            "vsize": vsize,
+            "rate_sat_vb": (
+                Decimal(fee_sats)
+                / Decimal(vsize)
+            ),
+            "source": "saved",
+        }
+
         print()
         print("Reusing saved signed Bitcoin refund:")
         print(refund_path)
@@ -6571,29 +7163,7 @@ def command_refund_btc(args):
             wallet=BTC_WALLET,
         )
 
-        fee_sats = int(
-            os.environ.get(
-                "BLAKE_SWAP_BTC_SPEND_FEE_SATS",
-                "1000",
-            )
-        )
-
-        if fee_sats < 1:
-            raise ValueError(
-                "BLAKE_SWAP_BTC_SPEND_FEE_SATS must be >= 1"
-            )
-
-        if swap.btc_sats <= fee_sats:
-            raise ValueError(
-                "BTC amount is too small for refund fee"
-            )
-
-        output_sats = swap.btc_sats - fee_sats
-
-        output_btc = (
-            Decimal(output_sats)
-            / Decimal(100_000_000)
-        )
+        input_sats = int(swap.btc_sats)
 
         inputs = [
             {
@@ -6603,49 +7173,69 @@ def command_refund_btc(args):
             }
         ]
 
-        outputs = {
-            destination: float(output_btc)
-        }
+        def build_refund_with_fee(fee_sats):
+            if fee_sats >= input_sats:
+                raise ValueError(
+                    "BTC amount is too small for refund fee"
+                )
 
-        raw = btc_cli(
-            "createrawtransaction",
-            json.dumps(inputs),
-            json.dumps(outputs),
-            swap.btc_timeout,
-        )
-
-        psbt = btc_cli(
-            "converttopsbt",
-            raw,
-        )
-
-        psbt = btc_cli(
-            "utxoupdatepsbt",
-            psbt,
-            json.dumps([desc]),
-        )
-
-        signed = btc_cli(
-            "walletprocesspsbt",
-            psbt,
-            True,
-            "ALL",
-            True,
-            False,
-            wallet=BTC_WALLET,
-        )
-
-        finalized = btc_cli(
-            "finalizepsbt",
-            signed["psbt"],
-        )
-
-        if not finalized.get("complete"):
-            raise RuntimeError(
-                "Bitcoin refund PSBT did not finalize"
+            output_sats = input_sats - fee_sats
+            output_btc = _sats_to_coin_decimal(
+                output_sats
             )
 
-        refund_hex = finalized["hex"]
+            outputs = {
+                destination: float(output_btc)
+            }
+
+            raw = btc_cli(
+                "createrawtransaction",
+                json.dumps(inputs),
+                json.dumps(outputs),
+                swap.btc_timeout,
+            )
+
+            psbt = btc_cli(
+                "converttopsbt",
+                raw,
+            )
+
+            psbt = btc_cli(
+                "utxoupdatepsbt",
+                psbt,
+                json.dumps([desc]),
+            )
+
+            signed = btc_cli(
+                "walletprocesspsbt",
+                psbt,
+                True,
+                "ALL",
+                True,
+                False,
+                wallet=BTC_WALLET,
+            )
+
+            finalized = btc_cli(
+                "finalizepsbt",
+                signed["psbt"],
+            )
+
+            if not finalized.get("complete"):
+                raise RuntimeError(
+                    "Bitcoin refund PSBT did not finalize"
+                )
+
+            return finalized["hex"]
+
+        fee_plan = build_dynamic_settlement_spend(
+            chain="btc",
+            cli=btc_cli,
+            input_sats=input_sats,
+            build_finalized=build_refund_with_fee,
+        )
+
+        refund_hex = fee_plan["hex"]
 
         refund_path.write_text(
             refund_hex + "\n"
@@ -6660,6 +7250,16 @@ def command_refund_btc(args):
     print("==============")
     print("current height:", current_height)
     print("refund height: ", swap.btc_timeout)
+    print("input sats:    ", swap.btc_sats)
+    print("output sats:   ", int(swap.btc_sats) - fee_plan["fee_sats"])
+    print("fee sats:      ", fee_plan["fee_sats"])
+    print("vsize:         ", fee_plan["vsize"], "vB")
+    print(
+        "rate:          ",
+        fee_plan["rate_sat_vb"],
+        "sat/vB",
+    )
+    print("fee source:    ", fee_plan["source"])
 
     if current_height < swap.btc_timeout:
         print()
@@ -6689,24 +7289,33 @@ def command_refund_btc(args):
         refund_hex,
     )
 
-    if not AUTO_MINE:
-        # Broadcasting a mature refund does not make it authoritative
-        # protocol state. Persist the transaction identity for
-        # restart/recovery, but remain BTC_FUNDED until confirmation.
-        swap.btc_refund_txid = txid
-        swap.btc_refund_blockhash = None
+    # Persist exact broadcast identity before any crash point.
+    # Durable protocol state remains BTC_FUNDED until the
+    # exact refund is confirmed on the active Bitcoin chain.
+    swap.btc_refund_txid = txid
+    swap.btc_refund_blockhash = None
 
-        save_swap(
-            swap,
-            role="bob",
-        )
+    save_swap(
+        swap,
+        role="bob",
+    )
 
-        _test_crash_after_broadcast("btc-refund-after-broadcast")
+    _test_crash_after_broadcast("btc-refund-after-broadcast")
 
-        protocol_failpoint(
-            "after_btc_refund_broadcast"
-        )
+    protocol_failpoint(
+        "after_btc_refund_broadcast"
+    )
 
+    if auto_mine_enabled():
+        mine_btc(1)
+
+    recovered = require_recovered_branch(
+        swap,
+        "btc",
+        "refund",
+    )
+
+    if recovered == "pending":
         print()
         print("BTC REFUND BROADCAST")
         print("====================")
@@ -6715,21 +7324,19 @@ def command_refund_btc(args):
         print("state: ", swap.state)
         print()
         print(
-            "Bitcoin refund is awaiting active-chain confirmation."
+            "Bitcoin refund is awaiting "
+            "active-chain confirmation."
         )
         return
 
-    _test_crash_after_broadcast("btc-refund-after-broadcast")
+    if recovered is None:
+        raise RuntimeError(
+            "Bitcoin refund broadcast is neither pending "
+            "nor confirmed"
+        )
 
-    protocol_failpoint(
-        "after_btc_refund_broadcast"
-    )
-
-    blockhash = mine_btc(1)[0]
-
-    swap.btc_refund_txid = txid
-    swap.btc_refund_blockhash = blockhash
-
+    swap.btc_refund_txid = recovered["txid"]
+    swap.btc_refund_blockhash = recovered["blockhash"]
 
     swap.transition(
          State.BTC_REFUNDED
@@ -6745,7 +7352,7 @@ def command_refund_btc(args):
     print("BTC REFUNDED")
     print("============")
     print("txid:  ", txid)
-    print("block: ", blockhash)
+    print("block: ", swap.btc_refund_blockhash)
     print("state: ", swap.state)
 
 def verify_final_blake_claim_active(swap):
@@ -8669,21 +9276,153 @@ def build_market_offer_event(
 
 
 
-def btc_trade_minimum_sats():
-    """
-    Local settlement-feasibility floor for the BTC leg.
-    """
-    fee_sats = int(
+def settlement_fee_target_blocks():
+    target = int(
         os.environ.get(
-            "BLAKE_SWAP_BTC_SPEND_FEE_SATS",
-            "1000",
+            "BLAKE_SWAP_FEE_TARGET_BLOCKS",
+            "2",
         )
     )
 
-    if fee_sats < 1:
+    if target < 1:
         raise ValueError(
-            "BLAKE_SWAP_BTC_SPEND_FEE_SATS must be >= 1"
+            "BLAKE_SWAP_FEE_TARGET_BLOCKS must be >= 1"
         )
+
+    return target
+
+
+def settlement_fee_multiplier():
+    multiplier = Decimal(
+        os.environ.get(
+            "BLAKE_SWAP_FEE_RATE_MULTIPLIER",
+            "1.0",
+        )
+    )
+
+    if multiplier < Decimal("1.0"):
+        raise ValueError(
+            "BLAKE_SWAP_FEE_RATE_MULTIPLIER must be >= 1.0"
+        )
+
+    return multiplier
+
+
+def settlement_fee_cap_percent():
+    value = Decimal(
+        os.environ.get(
+            "BLAKE_SWAP_MAX_SETTLEMENT_FEE_PERCENT",
+            "10",
+        )
+    )
+
+    if value <= 0 or value >= 100:
+        raise ValueError(
+            "BLAKE_SWAP_MAX_SETTLEMENT_FEE_PERCENT "
+            "must be > 0 and < 100"
+        )
+
+    return value
+
+
+def settlement_fee_override_sats(chain):
+    if chain == "btc":
+        name = "BLAKE_SWAP_BTC_SPEND_FEE_SATS"
+    elif chain == "blake":
+        name = "BLAKE_SWAP_BLAKE_SPEND_FEE_SATS"
+    else:
+        raise ValueError(
+            f"unknown settlement-fee chain: {chain}"
+        )
+
+    raw = os.environ.get(name)
+
+    if raw in (None, ""):
+        return None
+
+    value = int(raw)
+
+    if value < 1:
+        raise ValueError(
+            f"{name} must be >= 1"
+        )
+
+    return value
+
+
+def estimate_dynamic_settlement_fee(
+    cli,
+    *,
+    vsize,
+    input_sats=None,
+):
+    """
+    Derive a settlement fee from the node's current estimator
+    and policy floors.
+
+    This helper does not broadcast or mutate chain state.
+    """
+    estimate = cli(
+        "estimatesmartfee",
+        settlement_fee_target_blocks(),
+    )
+
+    mempool = cli(
+        "getmempoolinfo"
+    )
+
+    rate = choose_fee_rate_sat_vb(
+        estimate,
+        mempool,
+        multiplier=settlement_fee_multiplier(),
+    )
+
+    fee_sats = fee_for_vsize(
+        vsize,
+        rate,
+    )
+
+    if input_sats is not None:
+        enforce_fee_cap(
+            fee_sats,
+            input_sats,
+            max_percent=settlement_fee_cap_percent(),
+        )
+
+    return fee_sats, rate
+
+
+def btc_trade_minimum_sats():
+    """
+    Local settlement-feasibility floor for the BTC leg.
+
+    An explicit legacy override remains available for emergency
+    operator control. Otherwise derive the floor from current
+    Bitcoin node fee conditions using a conservative settlement
+    vsize estimate.
+    """
+    override = settlement_fee_override_sats("btc")
+
+    if override is not None:
+        return override + 1
+
+    vsize = int(
+        os.environ.get(
+            "BLAKE_SWAP_BTC_SETTLEMENT_VSIZE_ESTIMATE",
+            "200",
+        )
+    )
+
+    if vsize < 1:
+        raise ValueError(
+            "BLAKE_SWAP_BTC_SETTLEMENT_VSIZE_ESTIMATE "
+            "must be >= 1"
+        )
+
+    fee_sats, _rate = estimate_dynamic_settlement_fee(
+        btc_cli,
+        vsize=vsize,
+    )
 
     return fee_sats + 1
 
@@ -8696,7 +9435,7 @@ def validate_btc_trade_amount(btc_sats, context="trade"):
         raise ValueError(
             f"{context} BTC amount {btc_sats} sats is too small; "
             f"minimum settlement-feasible amount is {minimum} sats "
-            f"with BLAKE_SWAP_BTC_SPEND_FEE_SATS={minimum - 1}"
+            "under the current settlement fee policy"
         )
 
     return True
@@ -13652,6 +14391,119 @@ def scan_chain_for_expected_funding(swap, chain):
     return matches[0]
 
 
+def recover_recorded_confirmed_funding(swap, chain):
+    """
+    Fast path for a funding transaction whose exact outpoint was already
+    durably recorded before confirmation.
+
+    Verify the recorded outpoint directly.  If it is confirmed and valid,
+    recover its active blockhash from the local funding wallet and avoid a
+    historical chain scan.
+
+    Return None only when the recorded outpoint cannot be used as the fast
+    path; callers may then fall back to scan_chain_for_expected_funding().
+    A present-but-invalid recorded outpoint is a security failure and must
+    not silently fall back to a different transaction.
+    """
+
+    if chain == "blake":
+        cli = blake_cli
+        wallet = BLAKE_WALLET
+        tx_field = "blake_funding_txid"
+        vout_field = "blake_funding_vout"
+        block_field = "blake_funding_blockhash"
+        verifier = verify_blake_contract
+    elif chain == "btc":
+        cli = btc_cli
+        wallet = BTC_WALLET
+        tx_field = "btc_funding_txid"
+        vout_field = "btc_funding_vout"
+        block_field = "btc_funding_blockhash"
+        verifier = verify_btc_contract
+    else:
+        raise ValueError(
+            f"Unknown funding chain: {chain}"
+        )
+
+    txid = getattr(swap, tx_field)
+    vout = getattr(swap, vout_field)
+
+    if txid is None and vout is None:
+        return None
+
+    if txid is None or vout is None:
+        raise RuntimeError(
+            "SECURITY FAILURE: incomplete recorded "
+            f"{chain.upper()} funding outpoint"
+        )
+
+    utxo = cli(
+        "gettxout",
+        txid,
+        vout,
+    )
+
+    if not utxo:
+        # It may already be spent, or this participant may need full
+        # historical recovery.  Preserve the existing scan fallback.
+        return None
+
+    confirmations = int(
+        utxo.get("confirmations", 0) or 0
+    )
+
+    if confirmations < 1:
+        return None
+
+    #
+    # This proves amount, derived HTLC address and confirmation.
+    # Any mismatch in an already-recorded live outpoint is a security
+    # failure; do not silently search for some different transaction.
+    #
+    verifier(
+        swap,
+        verbose=False,
+    )
+
+    blockhash = getattr(
+        swap,
+        block_field,
+    )
+
+    #
+    # Normal funding recovery is especially cheap for the party that
+    # created the transaction: gettransaction gives us its confirmed
+    # blockhash directly.
+    #
+    if not blockhash:
+        try:
+            wallet_tx = cli(
+                "gettransaction",
+                txid,
+                wallet=wallet,
+            )
+        except Exception:
+            wallet_tx = None
+
+        if isinstance(wallet_tx, dict):
+            blockhash = wallet_tx.get(
+                "blockhash"
+            )
+
+    if not blockhash:
+        # Counterparty state may know the exact outpoint without owning
+        # the funding transaction.  Let the existing historical scanner
+        # recover the blockhash in that less-common case.
+        return None
+
+    return {
+        "txid": txid,
+        "vout": int(vout),
+        "blockhash": blockhash,
+        "confirmations": confirmations,
+        "recorded_fast_path": True,
+    }
+
 def command_sync_funding(args):
     """
     Reconcile funding state directly from confirmed chain history.
@@ -13688,9 +14540,15 @@ def command_sync_funding(args):
         #
         if state == State.OFFERED:
 
-            recovered = scan_chain_for_expected_funding(
-                swap,
-                "blake",
+            recovered = (
+                recover_recorded_confirmed_funding(
+                    swap,
+                    "blake",
+                )
+                or scan_chain_for_expected_funding(
+                    swap,
+                    "blake",
+                )
             )
 
             if recovered is None:
@@ -13744,9 +14602,24 @@ def command_sync_funding(args):
             )
 
             #
-            # Continue around the loop. It is possible that Bitcoin
-            # funding also already happened while this process was away.
+            # If Bitcoin funding is already recorded, continue around the
+            # loop and synchronize it too.  Otherwise stop here.  Missing
+            # Bitcoin funding is the normal next protocol condition after
+            # BLAKE funding, and ordinary Resume must not launch a
+            # historical Bitcoin scan merely to prove that Bob has not
+            # funded yet.
             #
+            if (
+                swap.btc_funding_txid is None
+                and swap.btc_funding_vout is None
+            ):
+                print()
+                print(
+                    "Bitcoin funding is not recorded; "
+                    "leaving BTC discovery for the next protocol stage."
+                )
+                break
+
             continue
 
         #
@@ -13754,9 +14627,15 @@ def command_sync_funding(args):
         #
         if state == State.BLAKE_FUNDED:
 
-            recovered = scan_chain_for_expected_funding(
-                swap,
-                "btc",
+            recovered = (
+                recover_recorded_confirmed_funding(
+                    swap,
+                    "btc",
+                )
+                or scan_chain_for_expected_funding(
+                    swap,
+                    "btc",
+                )
             )
 
             if recovered is None:
@@ -13828,7 +14707,6 @@ def command_sync_funding(args):
         "state:   ",
         swap.state,
     )
-
 
 def command_sync_settlement(args):
     """
@@ -14219,6 +15097,35 @@ def _reconcile_local_role(swap):
     )
 
 
+def require_local_protocol_role(
+    swap,
+    expected_role,
+    action,
+):
+    """
+    Fail closed before any economic action unless the persistent
+    participant identity is pinned to this swap in the protocol
+    role required by that action.
+    """
+    if expected_role not in ("alice", "bob"):
+        raise ValueError(
+            "expected_role must be alice or bob"
+        )
+
+    actual_role, me, counterparty = (
+        _reconcile_local_role(swap)
+    )
+
+    if actual_role != expected_role:
+        raise RuntimeError(
+            "SECURITY FAILURE: refusing "
+            f"{action} as protocol {actual_role}; "
+            f"protocol requires {expected_role}"
+        )
+
+    return actual_role, me, counterparty
+
+
 def _reconcile_quiet(fn, *args, **kwargs):
     import contextlib
     import io
@@ -14292,6 +15199,96 @@ def _reconcile_observe_htlc(swap, chain):
 
 
     if utxo:
+        confirmations = int(
+            utxo.get("confirmations", 0) or 0
+        )
+
+        #
+        # A zero-confirmation funding output is not invalid merely
+        # because it is still waiting for a block.  Before classifying
+        # it as pending, independently prove that the observed output
+        # has the expected amount and HTLC address.
+        #
+        if confirmations < 1:
+            try:
+                actual_address = (
+                    utxo
+                    .get("scriptPubKey", {})
+                    .get("address")
+                )
+
+                if chain == "blake":
+                    expected_address = (
+                        derive_blake_contract_address(
+                            get_blake_contract_descriptor(work)
+                        )
+                    )
+
+                    actual_amount = Decimal(
+                        str(utxo["value"])
+                    )
+                    expected_amount = Decimal(
+                        str(work.blake_amount)
+                    )
+
+                    if (
+                        abs(actual_amount - expected_amount)
+                        > Decimal("0.00000001")
+                    ):
+                        raise RuntimeError(
+                            "Wrong BLAKE amount: expected "
+                            f"{work.blake_amount}, "
+                            f"found {utxo['value']}"
+                        )
+
+                    if actual_address != expected_address:
+                        raise RuntimeError(
+                            "BLAKE funding output does not match "
+                            "the expected HTLC address"
+                        )
+
+                else:
+                    expected_address = (
+                        derive_btc_contract_address(
+                            get_btc_contract_descriptor(work)
+                        )
+                    )
+
+                    actual_sats = int(
+                        Decimal(str(utxo["value"]))
+                        * Decimal(100_000_000)
+                    )
+
+                    if actual_sats != work.btc_sats:
+                        raise RuntimeError(
+                            "Wrong Bitcoin amount: expected "
+                            f"{work.btc_sats} sats, "
+                            f"found {actual_sats} sats"
+                        )
+
+                    if actual_address != expected_address:
+                        raise RuntimeError(
+                            "Bitcoin funding output does not match "
+                            "the expected HTLC address"
+                        )
+
+            except Exception as e:
+                return {
+                    "status": "invalid",
+                    "txid": txid,
+                    "vout": vout,
+                    "reason": f"{type(e).__name__}: {e}",
+                }
+
+            return {
+                "status": "pending",
+                "txid": txid,
+                "vout": vout,
+                "blockhash": blockhash,
+                "confirmations": confirmations,
+                "discovered": discovered,
+            }
+
         try:
             _reconcile_quiet(verifier, work, verbose=False)
         except Exception as e:
@@ -14307,17 +15304,248 @@ def _reconcile_observe_htlc(swap, chain):
             "txid": txid,
             "vout": vout,
             "blockhash": blockhash,
-            "confirmations": int(utxo.get("confirmations", 0) or 0),
+            "confirmations": confirmations,
             "discovered": discovered,
         }
 
+    #
+    # A recorded funding transaction may still be in the mempool.
+    # Some RPC/provider paths can fail to expose the output through
+    # gettxout even though the exact recorded transaction is available.
+    #
+    # Before calling that state unknown, independently fetch the
+    # recorded transaction and prove that its exact vout is the expected
+    # HTLC output.  Only an unconfirmed transaction is classified here;
+    # confirmed/spent cases continue through normal settlement recovery.
+    #
     if not blockhash:
+        try:
+            funding_tx = cli(
+                "getrawtransaction",
+                txid,
+                True,
+            )
+        except Exception:
+            funding_tx = None
+
+        if funding_tx is not None:
+            confirmations = int(
+                funding_tx.get("confirmations", 0) or 0
+            )
+
+            if confirmations < 1:
+                funding_output = next(
+                    (
+                        output
+                        for output in funding_tx.get("vout", [])
+                        if int(output.get("n", -1)) == int(vout)
+                    ),
+                    None,
+                )
+
+                if funding_output is None:
+                    return {
+                        "status": "invalid",
+                        "txid": txid,
+                        "vout": vout,
+                        "reason": (
+                            "recorded unconfirmed funding transaction "
+                            "does not contain the recorded vout"
+                        ),
+                    }
+
+                actual_address = (
+                    funding_output
+                    .get("scriptPubKey", {})
+                    .get("address")
+                )
+
+                try:
+                    if chain == "blake":
+                        expected_address = (
+                            derive_blake_contract_address(
+                                get_blake_contract_descriptor(work)
+                            )
+                        )
+
+                        actual_amount = Decimal(
+                            str(funding_output["value"])
+                        )
+                        expected_amount = Decimal(
+                            str(work.blake_amount)
+                        )
+
+                        if (
+                            abs(actual_amount - expected_amount)
+                            > Decimal("0.00000001")
+                        ):
+                            raise RuntimeError(
+                                "recorded pending BLAKE funding "
+                                "has the wrong amount"
+                            )
+
+                    else:
+                        expected_address = (
+                            derive_btc_contract_address(
+                                get_btc_contract_descriptor(work)
+                            )
+                        )
+
+                        actual_sats = int(
+                            Decimal(str(funding_output["value"]))
+                            * Decimal(100_000_000)
+                        )
+
+                        if actual_sats != int(work.btc_sats):
+                            raise RuntimeError(
+                                "recorded pending Bitcoin funding "
+                                "has the wrong amount"
+                            )
+
+                    if actual_address != expected_address:
+                        raise RuntimeError(
+                            f"recorded pending {chain.upper()} funding "
+                            "does not match the expected HTLC address"
+                        )
+
+                except Exception as e:
+                    return {
+                        "status": "invalid",
+                        "txid": txid,
+                        "vout": vout,
+                        "reason": f"{type(e).__name__}: {e}",
+                    }
+
+                return {
+                    "status": "pending",
+                    "txid": txid,
+                    "vout": vout,
+                    "blockhash": None,
+                    "confirmations": 0,
+                    "discovered": discovered,
+                }
+
         return {
             "status": "unknown",
             "txid": txid,
             "vout": vout,
             "reason": "outpoint unavailable and funding blockhash is unknown",
         }
+
+    #
+    # The local participant may already have broadcast its expected
+    # claim/refund transaction and durably recorded its txid while that
+    # settlement transaction is still unconfirmed.
+    #
+    # Prove the exact mempool transaction spends this HTLC and uses the
+    # expected branch.  This is a WAIT condition, not manual attention.
+    #
+    if chain == "btc":
+        known_spenders = [
+            ("claim", work.btc_claim_txid, work.btc_claim_blockhash),
+            ("refund", work.btc_refund_txid, work.btc_refund_blockhash),
+        ]
+    else:
+        known_spenders = [
+            ("claim", work.blake_claim_txid, work.blake_claim_blockhash),
+            ("refund", work.blake_refund_txid, work.blake_refund_blockhash),
+        ]
+
+    pending_spenders = [
+        (expected_branch, settlement_txid)
+        for expected_branch, settlement_txid, settlement_blockhash
+        in known_spenders
+        if settlement_txid is not None
+        and settlement_blockhash is None
+    ]
+
+    if len(pending_spenders) > 1:
+        return {
+            "status": "invalid",
+            "txid": txid,
+            "vout": vout,
+            "reason": (
+                "durable state records multiple unconfirmed "
+                f"{chain.upper()} settlement transactions"
+            ),
+        }
+
+    if pending_spenders:
+        expected_branch, settlement_txid = pending_spenders[0]
+
+        #
+        # Direct lookup is only a fast path for recognizing our exact
+        # unconfirmed settlement.  Failure to retrieve the tx here is
+        # not itself ambiguous: it may have just confirmed, or a node
+        # without txindex may no longer expose it through this RPC.
+        #
+        # In either case, fall through to find_confirmed_htlc_spend(),
+        # which has the hardened wallet/block recovery path.
+        #
+        try:
+            settlement_tx = cli(
+                "getrawtransaction",
+                settlement_txid,
+                True,
+            )
+        except Exception:
+            settlement_tx = None
+
+        if settlement_tx is not None:
+            confirmations = int(
+                settlement_tx.get("confirmations", 0) or 0
+            )
+
+            if confirmations < 1:
+                try:
+                    spends_htlc = any(
+                        vin.get("txid") == txid
+                        and int(vin.get("vout", -1)) == int(vout)
+                        for vin in settlement_tx.get("vin", [])
+                    )
+
+                    if not spends_htlc:
+                        raise RuntimeError(
+                            "recorded pending settlement transaction "
+                            "does not spend this swap's HTLC"
+                        )
+
+                    actual_branch = classify_htlc_spend(
+                        settlement_tx,
+                        txid,
+                        vout,
+                        work.secret_hash,
+                    )
+
+                    if actual_branch != expected_branch:
+                        raise RuntimeError(
+                            "recorded pending settlement branch mismatch: "
+                            f"expected {expected_branch}, "
+                            f"observed {actual_branch}"
+                        )
+
+                except Exception as e:
+                    return {
+                        "status": "pending-or-ambiguous",
+                        "txid": txid,
+                        "vout": vout,
+                        "reason": f"{type(e).__name__}: {e}",
+                    }
+
+                return {
+                    "status": "pending-spend",
+                    "txid": txid,
+                    "vout": vout,
+                    "spend_txid": settlement_txid,
+                    "branch": actual_branch,
+                    "confirmations": 0,
+                    "discovered": discovered,
+                }
+
+            # A directly visible confirmed transaction deliberately falls
+            # through too.  find_confirmed_htlc_spend() independently
+            # verifies the recorded txid, HTLC outpoint, branch, active
+            # chain status, confirmations, and blockhash.
 
     try:
 
@@ -14353,7 +15581,6 @@ def _reconcile_observe_htlc(swap, chain):
         "discovered": discovered,
     }
 
-
 def _reconcile_next_action(swap, role, blake, btc, blake_height, btc_height):
     """Return one conservative recommendation.  Never execute it here."""
     state = State(swap.state)
@@ -14377,11 +15604,37 @@ def _reconcile_next_action(swap, role, blake, btc, blake_height, btc_height):
             "chain reality does not prove both claim branches",
         )
 
+    if blake.get("status") == "pending-spend":
+        return (
+            "wait",
+            "BLAKE settlement transaction is broadcast "
+            "and awaiting confirmation",
+        )
+
+    if btc.get("status") == "pending-spend":
+        return (
+            "wait",
+            "Bitcoin settlement transaction is broadcast "
+            "and awaiting confirmation",
+        )
+
     unsafe = {"unknown", "invalid", "pending-or-ambiguous"}
     if blake.get("status") in unsafe:
         return "manual-attention", f"BLAKE observation is {blake['status']}"
     if btc.get("status") in unsafe:
         return "manual-attention", f"Bitcoin observation is {btc['status']}"
+
+    if blake.get("status") == "pending":
+        return (
+            "wait",
+            "BLAKE funding is broadcast and awaiting confirmation",
+        )
+
+    if btc.get("status") == "pending":
+        return (
+            "wait",
+            "Bitcoin funding is broadcast and awaiting confirmation",
+        )
 
     # Chain truth outranks a stale checkpoint.
 
@@ -14504,7 +15757,6 @@ def _reconcile_next_action(swap, role, blake, btc, blake_height, btc_height):
             return "wait", "Bitcoin is funded; protocol Alice must claim and reveal S"
 
     return "manual-attention", f"no conservative rule matched checkpoint {state.value}"
-
 
 def _reconcile_negotiation_status(swap):
     """
@@ -14738,7 +15990,6 @@ def _reconcile_execution_readiness(
 
     return result
 
-
 def build_reconcile_report(swap):
     """Build a machine-readable, read-only protocol report."""
 
@@ -14823,7 +16074,50 @@ def build_reconcile_report(swap):
 
     blake = _reconcile_observe_htlc(swap, "blake")
 
-    btc = _reconcile_observe_htlc(swap, "btc")
+    state = State(swap.state)
+
+    #
+    # Do not perform an expensive forensic Bitcoin funding scan when
+    # current protocol state already has a cheaper, unambiguous next step.
+    #
+    # OFFERED + confirmed BLAKE means the durable checkpoint is stale:
+    # synchronize BLAKE funding first, then reconcile again.
+    #
+    # BLAKE_FUNDED + no recorded Bitcoin outpoint is the normal waiting
+    # condition while Bob's Bitcoin funding window remains open.  Treat it
+    # as absent for ordinary reconciliation.  Once that window closes,
+    # fall back to full chain discovery before any refund decision so that
+    # "Bitcoin was never funded" is independently established.
+    #
+    if (
+        state == State.OFFERED
+        and blake.get("status") == "funded"
+    ):
+        btc = {
+            "status": "not-evaluated",
+            "reason": (
+                "Bitcoin observation deferred until confirmed "
+                "BLAKE funding is synchronized locally"
+            ),
+        }
+
+    elif (
+        state == State.BLAKE_FUNDED
+        and swap.btc_funding_txid is None
+        and swap.btc_funding_vout is None
+        and btc_height < int(swap.btc_timeout)
+    ):
+        btc = {
+            "status": "absent",
+            "discovery_deferred": True,
+            "reason": (
+                "no Bitcoin funding outpoint is recorded and "
+                "the Bitcoin funding window remains open"
+            ),
+        }
+
+    else:
+        btc = _reconcile_observe_htlc(swap, "btc")
 
     secret_value = None
     secret_source = "none"
@@ -14908,7 +16202,6 @@ def build_reconcile_report(swap):
         "readiness": readiness,
         "read_only": True,
     }
-
 
 def command_reconcile(args):
     """Read-only protocol brain: observe, derive, recommend; never act."""
@@ -15216,14 +16509,9 @@ def command_next(args):
     # A. Authenticated Bob accept messages waiting to be imported.
     #    This is coordination only: no funds move.
     # --------------------------------------------------------------
-
-    resume_paths = sorted(BASE_SWAP_DIR.glob("*.json"))
-
-
-    for path in resume_paths:
+    for path in sorted(BASE_SWAP_DIR.glob("*.json")):
         if len(path.stem) != 12:
             continue
-
 
         try:
             swap = load_swap(
@@ -15701,11 +16989,7 @@ def command_next(args):
     # --------------------------------------------------------------
     funding_ready = []
 
-
-    resume_paths = sorted(BASE_SWAP_DIR.glob("*.json"))
-
-
-    for path in resume_paths:
+    for path in sorted(BASE_SWAP_DIR.glob("*.json")):
         if len(path.stem) != 12:
             continue
 
@@ -15847,11 +17131,9 @@ def command_next(args):
             ):
                 continue
 
-
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report = build_reconcile_report(swap)
-
         except Exception:
             continue
 
@@ -16516,12 +17798,9 @@ def command_resume(args):
     attention = []
     explicit = getattr(args, "swap_id", None)
 
-
     for path in sorted(BASE_SWAP_DIR.glob("*.json")):
-
         if len(path.stem) != 12:
             continue
-
 
         if explicit is not None:
             prefix = explicit.strip().lower()
@@ -16531,7 +17810,6 @@ def command_resume(args):
                 )
             if not path.stem.startswith(prefix):
                 continue
-
 
         try:
             swap = load_swap(
@@ -16544,20 +17822,15 @@ def command_resume(args):
         except Exception:
             continue
 
-
-
         if me not in {
             swap.nostr_alice_pub,
             swap.nostr_bob_pub,
         }:
             continue
 
-
-
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 report = build_reconcile_report(swap)
-
         except Exception:
             attention.append(
                 {
