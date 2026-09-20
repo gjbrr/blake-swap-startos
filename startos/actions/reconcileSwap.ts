@@ -87,6 +87,17 @@ export const reconcileSwap = sdk.Action.withInput(
       mounts,
       'reconcile-swap',
       async (sub) => {
+        // Run the engine underneath a tiny capture wrapper which itself
+        // exits successfully. Some StartOS exec paths can discard child
+        // stdout/stderr when the directly executed process exits nonzero.
+        // Returning structured output lets this action preserve the real
+        // engine traceback without changing engine semantics.
+        const captureScript = [
+          'import json, subprocess, sys',
+          'p = subprocess.run(sys.argv[1:], text=True, capture_output=True)',
+          'print(json.dumps({"exitCode": p.returncode, "stdout": p.stdout, "stderr": p.stderr}))',
+        ].join('; ')
+
         const result = await sub.exec([
           '/usr/bin/env',
 
@@ -117,17 +128,51 @@ export const reconcileSwap = sdk.Action.withInput(
           `BLAKE_SWAP_BTC_WALLET=${btcWallet}`,
 
           'python3',
+          '-c',
+          captureScript,
+
+          'python3',
           '/opt/blake-swap/src/swap_v2.py',
           'reconcile',
           swapId,
         ])
 
-        const stdout = result.stdout.toString().trim()
-
-        const stderr = result.stderr.toString().trim()
+        const wrapperStdout = result.stdout.toString().trim()
+        const wrapperStderr = result.stderr.toString().trim()
 
         if (result.exitCode !== 0) {
-          throw new Error(stderr || stdout || 'Swap reconciliation failed.')
+          throw new Error(
+            wrapperStderr ||
+              wrapperStdout ||
+              'Reconcile diagnostic wrapper failed.',
+          )
+        }
+
+        let captured: {
+          exitCode: number
+          stdout: string
+          stderr: string
+        }
+
+        try {
+          captured = JSON.parse(wrapperStdout)
+        } catch {
+          throw new Error(
+            wrapperStdout ||
+              wrapperStderr ||
+              'Reconcile diagnostic wrapper returned invalid output.',
+          )
+        }
+
+        const stdout = captured.stdout.trim()
+        const stderr = captured.stderr.trim()
+
+        if (captured.exitCode !== 0) {
+          throw new Error(
+            stderr ||
+              stdout ||
+              `Swap reconciliation failed with exit code ${captured.exitCode}.`,
+          )
         }
 
         return stdout || 'No reconcile output.'
