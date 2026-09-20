@@ -135,7 +135,7 @@ export const reconcileSwap = sdk.Action.withInput(
           '/opt/blake-swap/src/swap_v2.py',
           'reconcile',
           swapId,
-        ])
+        ], undefined, 120_000)
 
         const wrapperStdout = result.stdout.toString().trim()
         const wrapperStderr = result.stderr.toString().trim()
