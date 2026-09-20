@@ -27,6 +27,7 @@ import { cancelOffer } from './cancelOffer'
 import { takeOffer } from './takeOffer'
 import { acceptTake } from './acceptTake'
 import { acceptMatch } from './acceptMatch'
+import { acceptReverseSwapOffer } from './acceptReverseSwapOffer'
 
 export const actions = sdk.Actions.of()
   .addAction(verifyEngine)
@@ -48,6 +49,7 @@ export const actions = sdk.Actions.of()
   .addAction(takeOffer)
   .addAction(acceptTake)
   .addAction(acceptMatch)
+  .addAction(acceptReverseSwapOffer)
   .addAction(fundBlake)
   .addAction(publishBlakeFunding)
   .addAction(receiveBtcFunding)
