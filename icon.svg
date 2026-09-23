@@ -1,11 +1,144 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#4F46E5"/>
-      <stop offset="100%" stop-color="#7C3AED"/>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#071727"/>
+      <stop offset="65%" stop-color="#12384b"/>
+      <stop offset="100%" stop-color="#0a2028"/>
     </linearGradient>
+
+    <linearGradient id="machine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#467a83"/>
+      <stop offset="100%" stop-color="#163a43"/>
+    </linearGradient>
+
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffd277"/>
+      <stop offset="100%" stop-color="#ef8e22"/>
+    </linearGradient>
+
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#80d6ff"/>
+      <stop offset="100%" stop-color="#28669e"/>
+    </linearGradient>
+
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
-  <path d="M256 120c-88.4 0-160 58.1-160 129.8 0 41.4 23.6 78.4 60.5 103.2l-12.9 51.5a8 8 0 0 0 11.6 8.8l62.6-36.1c12.3 2.5 25.2 3.8 38.2 3.8 88.4 0 160-58.1 160-129.8S344.4 120 256 120z" fill="white" opacity="0.95"/>
-  <text x="256" y="270" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="64" fill="#4F46E5">Hello!</text>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="76" fill="url(#sky)"/>
+
+  <!-- moon -->
+  <circle cx="395" cy="93" r="53" fill="#ffe0a0" opacity=".94"/>
+  <circle cx="416" cy="78" r="52" fill="#0b1f30"/>
+
+  <!-- distant harbor -->
+  <path d="M0 333
+           L38 300 65 316 102 278 133 309 167 289
+           196 322 228 294 256 315 291 278
+           324 307 354 288 384 315 421 281
+           454 309 485 290 512 306
+           V512 H0Z"
+        fill="#09232c" opacity=".72"/>
+
+  <!-- dock -->
+  <rect x="0" y="406" width="512" height="106" fill="#171b1c"/>
+  <path d="M0 427H512M0 462H512M0 495H512"
+        stroke="#65472f" stroke-width="5" opacity=".65"/>
+  <path d="M48 406V512M145 406V512M247 406V512M355 406V512M461 406V512"
+        stroke="#392b22" stroke-width="7"/>
+
+  <!-- vending machine -->
+  <rect x="117" y="75" width="278" height="360" rx="25"
+        fill="#102f37" stroke="#c79648" stroke-width="8"/>
+
+  <rect x="137" y="95" width="238" height="78" rx="12"
+        fill="#111a1d" stroke="#805a2b" stroke-width="5"/>
+
+  <text x="256" y="146"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="46"
+        font-weight="900"
+        fill="#ffc65c"
+        filter="url(#glow)">XBT SWAP</text>
+
+  <!-- illuminated display -->
+  <rect x="149" y="190" width="214" height="102" rx="15"
+        fill="#081b21" stroke="#4aa9be" stroke-width="5"/>
+
+  <!-- XBT token -->
+  <circle cx="201" cy="241" r="34"
+          fill="url(#blue)" stroke="#b7e9ff" stroke-width="4"/>
+  <text x="201" y="250"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="25"
+        font-weight="900"
+        fill="#061723">XBT</text>
+
+  <!-- atomic swap arrows -->
+  <path d="M239 222H296L281 207
+           M296 222L281 237"
+        fill="none" stroke="#f4d58c" stroke-width="8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M296 260H239L254 245
+           M239 260L254 275"
+        fill="none" stroke="#f4d58c" stroke-width="8"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- BTC token -->
+  <circle cx="315" cy="241" r="34"
+          fill="url(#orange)" stroke="#ffe1a0" stroke-width="4"/>
+  <text x="315" y="250"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="24"
+        font-weight="900"
+        fill="#472b0c">BTC</text>
+
+  <!-- vending controls -->
+  <rect x="149" y="311" width="131" height="73" rx="10"
+        fill="#07191e" stroke="#32616c" stroke-width="4"/>
+
+  <text x="214" y="340"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="17"
+        font-weight="700"
+        fill="#8fd8dd">ATOMIC</text>
+
+  <text x="214" y="366"
+        text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif"
+        font-size="17"
+        font-weight="700"
+        fill="#8fd8dd">SWAP</text>
+
+  <!-- decentralized/network lights -->
+  <circle cx="314" cy="323" r="8" fill="#70d7b5"/>
+  <circle cx="344" cy="323" r="8" fill="#e8b65e"/>
+  <circle cx="314" cy="354" r="8" fill="#e8b65e"/>
+  <circle cx="344" cy="354" r="8" fill="#70d7b5"/>
+
+  <path d="M314 323L344 323L314 354L344 354"
+        stroke="#547982" stroke-width="3" opacity=".7"/>
+
+  <!-- output tray -->
+  <rect x="171" y="397" width="170" height="25" rx="8"
+        fill="#050d10" stroke="#775735" stroke-width="4"/>
+
+  <!-- subtle Nostr signal -->
+  <path d="M404 344
+           q35 -35 70 0
+           M416 356
+           q23 -23 46 0"
+        fill="none" stroke="#8b6cc7" stroke-width="6"
+        stroke-linecap="round" opacity=".65"/>
 </svg>

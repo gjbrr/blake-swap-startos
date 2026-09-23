@@ -327,7 +327,7 @@ export const resumeSwap = sdk.Action.withInput(
                 type: 'single',
                 name: i18n('Result'),
                 description: null,
-                value: summarizeResult(stdout),
+                value: stdout || 'resume completed with no output',
                 masked: false,
                 copyable: true,
                 qr: false,

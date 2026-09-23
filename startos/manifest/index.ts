@@ -3,11 +3,11 @@ import { long, short } from './i18n'
 
 export const manifest = setupManifest({
   id: 'blake-swap',
-  title: 'BLAKE Swap',
+  title: 'XBT/BTC Atomic Swap',
   license: '', // Upstream license not yet established
-  packageRepo: 'https://blake-swap-startos.invalid/', // Private alpha: repository not yet published
-  upstreamRepo: 'https://blake-swap-upstream.invalid/', // Private alpha: upstream URL not yet established
-  marketingUrl: 'https://blake-swap.invalid/', // Private alpha: project website not yet established
+  packageRepo: 'https://github.com/gjbrr/blake-swap-startos', // Private alpha
+  upstreamRepo: 'https://github.com/gjbrr/blake-swap', // Private alpha
+  marketingUrl: 'https://github.com/gjbrr/blake-swap-startos', // Temporary project page
   donationUrl: null,
   description: { short, long },
   // 'example-volume' is an arbitrary id — name volumes whatever suits the
@@ -25,7 +25,7 @@ export const manifest = setupManifest({
   },
   dependencies: {
     bitcoind: {
-      description: 'Provides the BLAKE/RDTS blockchain backend for BLAKE Swap.',
+      description: 'Provides the Bitcoin Blake2b blockchain backend for XBT/BTC Atomic Swap.',
       optional: false,
       s9pk: null,
     },

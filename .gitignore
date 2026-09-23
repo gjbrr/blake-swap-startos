@@ -6,3 +6,18 @@ node_modules/
 docker-images
 javascript
 ncc-cache
+# Local development backups / scratch artifacts
+*.before-*
+*.after-*
+upstream-project/vendor-backups/
+
+# Local secrets / runtime material
+*.key
+*.pem
+*.cookie
+.env
+.env.*
+
+# Generated / local build state
+dist/
+coverage/
