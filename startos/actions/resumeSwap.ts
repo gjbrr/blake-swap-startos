@@ -218,6 +218,8 @@ export const resumeSwap = sdk.Action.withInput(
               'python3',
               '/opt/blake-swap/src/swap_v2.py',
               'resume',
+              '--max-steps',
+              '1',
             ]
 
             if (requested !== '') {
