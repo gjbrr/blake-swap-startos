@@ -17,6 +17,7 @@ import { receiveBtcFunding } from './receiveBtcFunding'
 import { resumeSwap } from './resumeSwap'
 import { reconcileSwap } from './reconcileSwap'
 import { viewMarket } from './viewMarket'
+import { swapStatus } from './swapStatus'
 import { showParticipantIdentity } from './showParticipantIdentity'
 import {
   getBlakeDepositAddress,
@@ -41,6 +42,7 @@ export const actions = sdk.Actions.of()
   .addAction(checkWalletReadiness)
   .addAction(checkEconomicReadiness)
   .addAction(viewMarket)
+  .addAction(swapStatus)
   .addAction(showParticipantIdentity)
   .addAction(getBlakeDepositAddress)
   .addAction(getBtcDepositAddress)
