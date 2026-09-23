@@ -13,12 +13,23 @@ const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
 const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
 const inputSpec = InputSpec.of({
-  takeId: Value.text({
-    name: i18n('Take ID'),
+  offerId: Value.text({
+    name: i18n('Offer ID / Prefix'),
     description: i18n(
-      'Full 64-character Nostr event ID of the signed market take you want to accept.',
+      'Normal path: enter your market offer ID or unique hexadecimal prefix of at least 8 characters. If exactly one valid take exists, it will be selected automatically.',
     ),
-    required: true,
+    required: false,
+    default: null,
+    placeholder: '0123456789ab',
+    masked: false,
+  }),
+
+  takeId: Value.text({
+    name: i18n('Exact Take ID (Recovery / Advanced)'),
+    description: i18n(
+      'Optional full 64-character take ID. Use this to retry or recover an already-selected negotiation directly.',
+    ),
+    required: false,
     default: null,
     placeholder:
       '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
@@ -71,11 +82,24 @@ export const acceptTake = sdk.Action.withInput(
   async () => null,
 
   async ({ effects, input }) => {
-    const takeId = input.takeId.trim().toLowerCase()
+    const requestedOffer = input.offerId?.trim().toLowerCase() ?? ''
+    const requestedTake = input.takeId?.trim().toLowerCase() ?? ''
 
-    if (!/^[0-9a-f]{64}$/.test(takeId)) {
+    if (requestedOffer === '' && requestedTake === '') {
       throw new Error(
-        i18n('Take ID must be exactly 64 hexadecimal characters.'),
+        i18n('Enter an Offer ID / Prefix or an exact Take ID.'),
+      )
+    }
+
+    if (requestedOffer !== '' && !/^[0-9a-f]{8,64}$/.test(requestedOffer)) {
+      throw new Error(
+        i18n('Offer ID prefix must contain 8 to 64 hexadecimal characters.'),
+      )
+    }
+
+    if (requestedTake !== '' && !/^[0-9a-f]{64}$/.test(requestedTake)) {
+      throw new Error(
+        i18n('Exact Take ID must be exactly 64 hexadecimal characters.'),
       )
     }
 
@@ -185,6 +209,127 @@ export const acceptTake = sdk.Action.withInput(
               'python3',
               '/opt/blake-swap/src/swap_v2.py',
             ]
+
+            let takeId = requestedTake
+
+            if (takeId === '') {
+              const discoveryResult = await sub.exec([
+                ...engineEnv,
+                'market-takes',
+                requestedOffer,
+                '--json',
+                '--limit',
+                '200',
+              ])
+
+              const discoveryStdout = discoveryResult.stdout.toString().trim()
+              const discoveryStderr = discoveryResult.stderr.toString().trim()
+
+              if (discoveryResult.exitCode !== 0) {
+                throw new Error(
+                  lastNonemptyLine(discoveryStderr) ??
+                    i18n('Market take discovery failed.'),
+                )
+              }
+
+              let discovered: unknown
+
+              try {
+                discovered = JSON.parse(discoveryStdout) as unknown
+              } catch {
+                throw new Error(
+                  i18n('Market take discovery returned invalid JSON.'),
+                )
+              }
+
+              if (
+                typeof discovered !== 'object' ||
+                discovered === null ||
+                !('takes' in discovered) ||
+                !Array.isArray(
+                  (discovered as { takes?: unknown }).takes,
+                )
+              ) {
+                throw new Error(
+                  i18n('Market take discovery did not return a takes array.'),
+                )
+              }
+
+              const takes = (
+                discovered as {
+                  takes: Array<{ event_id?: unknown; taker?: unknown }>
+                }
+              ).takes
+
+              if (takes.length === 0) {
+                return {
+                  version: '1',
+                  title: i18n('No Valid Takes'),
+                  message: i18n(
+                    'No valid signed take currently exists for this offer.',
+                  ),
+                  result: {
+                    type: 'single',
+                    name: i18n('Result'),
+                    description: null,
+                    value: 'no valid takes',
+                    masked: false,
+                    copyable: false,
+                    qr: false,
+                  },
+                }
+              }
+
+              if (takes.length > 1) {
+                const candidates = takes
+                  .map((item) => {
+                    const eventId =
+                      typeof item.event_id === 'string'
+                        ? item.event_id
+                        : '<invalid-id>'
+
+                    const taker =
+                      typeof item.taker === 'string'
+                        ? item.taker
+                        : '<unknown>'
+
+                    return `take=${eventId} taker=${taker}`
+                  })
+                  .join('\n')
+
+                return {
+                  version: '1',
+                  title: i18n('Multiple Valid Takes'),
+                  message: i18n(
+                    'More than one valid counterparty take exists. No take was selected automatically. Re-run this action with the exact Take ID you want.',
+                  ),
+                  result: {
+                    type: 'single',
+                    name: i18n('Candidates'),
+                    description: null,
+                    value: candidates,
+                    masked: false,
+                    copyable: true,
+                    qr: false,
+                  },
+                }
+              }
+
+              const onlyTake = takes[0]?.event_id
+
+              if (
+                typeof onlyTake !== 'string' ||
+                !/^[0-9a-f]{64}$/.test(onlyTake)
+              ) {
+                throw new Error(
+                  i18n(
+                    'Market take discovery returned an invalid take ID.',
+                  ),
+                )
+              }
+
+              takeId = onlyTake
+            }
 
             const acceptResult = await sub.exec([
               ...engineEnv,

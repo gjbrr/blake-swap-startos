@@ -251,6 +251,24 @@ const dict = {
   'BTC Settlement Fees': 236,
   'BTC settlement fee policy saved successfully.': 237,
   'Settlement Fee Policy': 238,
+
+  // actions/acceptTake.ts — offer-driven discovery UX
+  'Offer ID / Prefix': 239,
+  'Normal path: enter your market offer ID or unique hexadecimal prefix of at least 8 characters. If exactly one valid take exists, it will be selected automatically.': 240,
+  'Exact Take ID (Recovery / Advanced)': 241,
+  'Optional full 64-character take ID. Use this to retry or recover an already-selected negotiation directly.': 242,
+  'Enter an Offer ID / Prefix or an exact Take ID.': 243,
+  'Offer ID prefix must contain 8 to 64 hexadecimal characters.': 244,
+  'Exact Take ID must be exactly 64 hexadecimal characters.': 245,
+  'Market take discovery failed.': 246,
+  'Market take discovery returned invalid JSON.': 247,
+  'Market take discovery did not return a takes array.': 248,
+  'No Valid Takes': 249,
+  'No valid signed take currently exists for this offer.': 250,
+  'Multiple Valid Takes': 251,
+  'More than one valid counterparty take exists. No take was selected automatically. Re-run this action with the exact Take ID you want.': 252,
+  'Candidates': 253,
+  'Market take discovery returned an invalid take ID.': 254,
 } as const
 
 /**
