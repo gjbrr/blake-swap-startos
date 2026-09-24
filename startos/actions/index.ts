@@ -6,6 +6,8 @@ import { verifyPersistenceMarker } from './verifyPersistenceMarker'
 import { checkBlakeRpc } from './checkBlakeRpc'
 import { checkBtcRpc } from './checkBtcRpc'
 import { configureBtcProvider } from './configureBtcProvider'
+import { configureBlakeProvider } from './configureBlakeProvider'
+import { configureNodeProviders } from './configureNodeProviders'
 import { configureBtcFeePolicy } from './configureBtcFeePolicy'
 import { configureNostrRelays } from './configureNostrRelays'
 import { configureWallets } from './configureWallets'
@@ -36,6 +38,8 @@ export const actions = sdk.Actions.of()
   .addAction(verifyPersistenceMarker)
   .addAction(checkBlakeRpc)
   .addAction(configureBtcProvider)
+  .addAction(configureBlakeProvider)
+  .addAction(configureNodeProviders)
   .addAction(configureBtcFeePolicy)
   .addAction(configureNostrRelays)
   .addAction(configureWallets)
