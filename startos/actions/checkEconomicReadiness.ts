@@ -5,12 +5,8 @@ import { getBlakeBlockchainInfo } from '../lib/blakeBlockchainInfo'
 import { getBtcBlockchainInfo } from '../lib/btcBlockchainInfo'
 import { isBlakeEconomicallyReady } from '../lib/blakeReadiness'
 import { isBtcEconomicallyReady } from '../lib/btcReadiness'
-import { observeWalletReadiness } from '../lib/observeWalletReadiness'
+import { observeConfiguredWallet } from '../lib/observeConfiguredWallet'
 import { isObservationEconomicallyReady } from '../lib/walletReadinessObservation'
-
-const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
-const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
-const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
 export const checkEconomicReadiness = sdk.Action.withoutInput(
   'check-economic-readiness',
@@ -38,83 +34,17 @@ export const checkEconomicReadiness = sdk.Action.withoutInput(
 
     const btcBlockchain = await getBtcBlockchainInfo(effects)
 
-    const blakeRpcAddr = await sdk.host
-      .getBridgeAddress(effects, {
-        packageId: BLAKE_PROVIDER_PACKAGE_ID,
-        hostId: BLAKE_PROVIDER_RPC_HOST_ID,
-        internalPort: BLAKE_PROVIDER_RPC_INTERNAL_PORT,
-        ssl: false,
-      })
-      .once()
+    const blake = await observeConfiguredWallet(effects, 'blake', blakeWallet)
 
-    if (!blakeRpcAddr) {
-      throw new Error(i18n('BLAKE RPC is unavailable.'))
-    }
-
-    const mounts = sdk.Mounts.of()
-      .mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: true,
-      })
-      .mountDependency({
-        dependencyId: BLAKE_PROVIDER_PACKAGE_ID,
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/mnt/bitcoind',
-        readonly: true,
-      })
-
-    const wallets = await sdk.SubContainer.withTemp(
-      effects,
-      { imageId: 'blake-swap' },
-      mounts,
-      'check-economic-readiness',
-      async (sub) => {
-        async function runJson(command: string[]): Promise<unknown> {
-          const result = await sub.exec(command)
-
-          if (result.exitCode !== 0) {
-            throw new Error(
-              result.stderr.toString().trim() || 'wallet RPC failed',
-            )
-          }
-
-          return JSON.parse(result.stdout.toString()) as unknown
-        }
-
-        const blake = await observeWalletReadiness(runJson, {
-          cli: '/opt/blake-swap/adapters/blake-rpc-cli',
-          wallet: blakeWallet,
-          env: [
-            `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-            'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-          ],
-        })
-
-        const btc = await observeWalletReadiness(runJson, {
-          cli: '/opt/blake-swap/adapters/btc-rpc-cli',
-          wallet: btcWallet,
-          env: [
-            'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-          ],
-        })
-
-        return {
-          blake,
-          btc,
-        }
-      },
-    )
+    const btc = await observeConfiguredWallet(effects, 'btc', btcWallet)
 
     const blakeChainReady = isBlakeEconomicallyReady(blakeBlockchain)
 
     const btcChainReady = isBtcEconomicallyReady(btcBlockchain)
 
-    const blakeWalletReady = isObservationEconomicallyReady(wallets.blake)
+    const blakeWalletReady = isObservationEconomicallyReady(blake)
 
-    const btcWalletReady = isObservationEconomicallyReady(wallets.btc)
+    const btcWalletReady = isObservationEconomicallyReady(btc)
 
     const readinessValue = (ready: boolean) =>
       ready ? i18n('Ready') : i18n('Not Ready')

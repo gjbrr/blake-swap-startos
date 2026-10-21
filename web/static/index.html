@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+  <title>XBT/BTC Atomic Swap</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+  <main>
+    <header>
+      <h1>XBT/BTC Atomic Swap</h1>
+      <p>Trustless atomic swap status</p>
+    </header>
+
+    <section class="actions">
+      <button disabled>Create Offer</button>
+      <button disabled>Take Offer</button>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>Swaps</h2>
+        <button id="refresh">Refresh</button>
+      </div>
+
+      <p id="message">Loading status…</p>
+      <div id="swaps"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

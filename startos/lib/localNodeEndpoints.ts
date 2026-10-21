@@ -24,7 +24,7 @@ export const LOCAL_NODE_ENDPOINTS = {
     // The package config declares rpccookiefile=.cookie, but the
     // runtime datadir still needs to be verified while the service
     // is running before we make this path authoritative.
-    cookieRelativePath: null,
+    cookieRelativePath: '.cookie',
   },
 } as const satisfies Record<
   'bitcoind' | 'knots-blake2b',

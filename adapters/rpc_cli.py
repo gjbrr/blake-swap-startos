@@ -331,23 +331,19 @@ def rpc_batch_request(
     return results
 
 
-def btc_connection():
+def external_rpc_connection(
+    config_path,
+    label,
+):
     """
-    Load the configured external Bitcoin RPC connection once.
+    Load an HTTPS RPC provider configuration.
 
     Returns:
         (rpc_url, username, password, ssl_context)
     """
-    config_path = Path(
-        os.environ.get(
-            "BLAKE_SWAP_BTC_PROVIDER_CONFIG",
-            "/data/config/btc-provider.json",
-        )
-    )
-
     if not config_path.is_file():
         raise AdapterError(
-            "BTC provider is not configured"
+            f"{label} provider is not configured"
         )
 
     try:
@@ -356,7 +352,7 @@ def btc_connection():
         )
     except Exception:
         raise AdapterError(
-            "BTC provider configuration is invalid"
+            f"{label} provider configuration is invalid"
         ) from None
 
     try:
@@ -368,12 +364,12 @@ def btc_connection():
         ]
     except (KeyError, AttributeError):
         raise AdapterError(
-            "BTC provider configuration is incomplete"
+            f"{label} provider configuration is incomplete"
         ) from None
 
     if not rpc_url.startswith("https://"):
         raise AdapterError(
-            "BTC RPC URL must use HTTPS"
+            f"{label} RPC URL must use HTTPS"
         )
 
     context = ssl.create_default_context()
@@ -384,7 +380,7 @@ def btc_connection():
         )
     except Exception:
         raise AdapterError(
-            "BTC trusted CA is invalid"
+            f"{label} trusted CA is invalid"
         ) from None
 
     return (
@@ -392,6 +388,81 @@ def btc_connection():
         username,
         password,
         context,
+    )
+
+
+def internal_cookie_connection(
+    rpc_url,
+    cookie_path,
+    label,
+):
+    """
+    Load a StartOS-internal HTTP + cookie RPC connection.
+    """
+    if not rpc_url.startswith("http://"):
+        raise AdapterError(
+            f"{label} internal RPC URL must use HTTP"
+        )
+
+    if not cookie_path.is_file():
+        raise AdapterError(
+            f"{label} RPC cookie is unavailable"
+        )
+
+    cookie = cookie_path.read_text().strip()
+
+    if ":" not in cookie:
+        raise AdapterError(
+            f"{label} RPC cookie is malformed"
+        )
+
+    username, password = cookie.split(
+        ":",
+        1,
+    )
+
+    return (
+        rpc_url,
+        username,
+        password,
+        None,
+    )
+
+
+def btc_connection():
+    """
+    Resolve either a local StartOS Bitcoin provider or an
+    external HTTPS Bitcoin provider.
+    """
+    internal_url = os.environ.get(
+        "BLAKE_SWAP_BTC_RPC_URL",
+        "",
+    ).strip()
+
+    if internal_url:
+        cookie_path = Path(
+            os.environ.get(
+                "BLAKE_SWAP_BTC_COOKIE_PATH",
+                "/mnt/bitcoind/.cookie",
+            )
+        )
+
+        return internal_cookie_connection(
+            internal_url,
+            cookie_path,
+            "BTC",
+        )
+
+    config_path = Path(
+        os.environ.get(
+            "BLAKE_SWAP_BTC_PROVIDER_CONFIG",
+            "/data/config/btc-provider.json",
+        )
+    )
+
+    return external_rpc_connection(
+        config_path,
+        "BTC",
     )
 
 
@@ -595,50 +666,61 @@ def btc_scan_funding_range(
 
 
 
-def blake_request(wallet, method, params):
-    base_url = os.environ.get(
+def blake_connection():
+    """
+    Resolve either a local StartOS BLAKE provider or an
+    external HTTPS BLAKE provider.
+    """
+    internal_url = os.environ.get(
         "BLAKE_SWAP_BLAKE_RPC_URL",
         "",
     ).strip()
 
-    cookie_path = Path(
+    if internal_url:
+        cookie_path = Path(
+            os.environ.get(
+                "BLAKE_SWAP_BLAKE_COOKIE_PATH",
+                "/mnt/bitcoind/.cookie",
+            )
+        )
+
+        return internal_cookie_connection(
+            internal_url,
+            cookie_path,
+            "BLAKE",
+        )
+
+    config_path = Path(
         os.environ.get(
-            "BLAKE_SWAP_BLAKE_COOKIE_PATH",
-            "/mnt/bitcoind/.cookie",
+            "BLAKE_SWAP_BLAKE_PROVIDER_CONFIG",
+            "/data/config/blake-provider.json",
         )
     )
 
-    if not base_url.startswith("http://"):
-        raise AdapterError(
-            "BLAKE RPC URL must use internal HTTP"
-        )
-
-    if not cookie_path.is_file():
-        raise AdapterError(
-            "BLAKE RPC cookie is unavailable"
-        )
-
-    cookie = cookie_path.read_text().strip()
-
-    if ":" not in cookie:
-        raise AdapterError(
-            "BLAKE RPC cookie is malformed"
-        )
-
-    username, password = cookie.split(
-        ":",
-        1,
+    return external_rpc_connection(
+        config_path,
+        "BLAKE",
     )
+
+
+def blake_request(wallet, method, params):
+    (
+        rpc_url,
+        username,
+        password,
+        context,
+    ) = blake_connection()
 
     return rpc_request(
         url=wallet_rpc_url(
-            base_url,
+            rpc_url,
             wallet,
         ),
         username=username,
         password=password,
         method=method,
         params=params,
+        ssl_context=context,
     )
 
 

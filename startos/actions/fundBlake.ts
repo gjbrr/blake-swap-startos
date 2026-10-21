@@ -1,4 +1,5 @@
 import { sdk } from '../sdk'
+import { resolveSwapRpcContext } from '../lib/resolveSwapRpcContext'
 
 const { InputSpec, Value } = sdk
 import { i18n } from '../i18n'
@@ -8,10 +9,6 @@ import { requireBlakeEconomicContextReadiness } from '../lib/requireBlakeEconomi
 import { requireBtcEconomicContextReadiness } from '../lib/requireBtcEconomicContextReadiness'
 import { withSwapEconomicContext } from '../lib/withSwapEconomicContext'
 import { requireProtocolRole } from '../lib/requireProtocolRole'
-
-const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
-const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
-const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
 const inputSpec = InputSpec.of({
   swapId: Value.text({
@@ -68,38 +65,12 @@ export const fundBlake = sdk.Action.withInput(
       )
     }
 
-    const blakeRpcAddr = await sdk.host
-      .getBridgeAddress(effects, {
-        packageId: BLAKE_PROVIDER_PACKAGE_ID,
-        hostId: BLAKE_PROVIDER_RPC_HOST_ID,
-        internalPort: BLAKE_PROVIDER_RPC_INTERNAL_PORT,
-        ssl: false,
-      })
-      .once()
-
-    if (!blakeRpcAddr) {
-      throw new Error(i18n('BLAKE RPC is unavailable.'))
-    }
-
-    const mounts = sdk.Mounts.of()
-      .mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: false,
-      })
-      .mountDependency({
-        dependencyId: BLAKE_PROVIDER_PACKAGE_ID,
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/mnt/bitcoind',
-        readonly: true,
-      })
+    const rpc = await resolveSwapRpcContext(effects)
 
     const outcome = await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'blake-swap' },
-      mounts,
+      rpc.mounts,
       'fund-blake',
       async (sub) => {
         async function runJson(command: string[]): Promise<unknown> {
@@ -119,19 +90,14 @@ export const fundBlake = sdk.Action.withInput(
             requireBlakeEconomicContextReadiness(effects, runJson, {
               cli: '/opt/blake-swap/adapters/blake-rpc-cli',
               wallet: blakeWallet,
-              env: [
-                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-              ],
+              env: rpc.blakeEnv,
             }),
 
           () =>
             requireBtcEconomicContextReadiness(effects, runJson, {
               cli: '/opt/blake-swap/adapters/btc-rpc-cli',
               wallet: btcWallet,
-              env: [
-                'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-              ],
+              env: rpc.btcEnv,
             }),
 
           async () => {
@@ -151,9 +117,7 @@ export const fundBlake = sdk.Action.withInput(
               'BLAKE_SWAP_BTC_DATADIR=',
               'BLAKE_SWAP_AUTO_MINE=0',
               'BLAKE_SWAP_BLAKE_NETWORK=main',
-              `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-              'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-              'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+              ...rpc.engineEnv,
               `BLAKE_SWAP_BLAKE_WALLET=${blakeWallet}`,
               `BLAKE_SWAP_BTC_WALLET=${btcWallet}`,
               'python3',

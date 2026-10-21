@@ -1,4 +1,5 @@
 import { sdk } from '../sdk'
+import { resolveSwapRpcContext } from '../lib/resolveSwapRpcContext'
 import { i18n } from '../i18n'
 import { getNostrRelayEnv } from '../file-models/nostrRelays'
 
@@ -42,17 +43,12 @@ export const receiveBtcFunding = sdk.Action.withInput(
       throw new Error('Swap ID must be exactly 12 hexadecimal characters.')
     }
 
-    const mounts = sdk.Mounts.of().mountVolume({
-      volumeId: 'main',
-      subpath: null,
-      mountpoint: '/data',
-      readonly: false,
-    })
+    const rpc = await resolveSwapRpcContext(effects)
 
     const outcome = await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'blake-swap' },
-      mounts,
+      rpc.mounts,
       'receive-btc-funding',
       async (sub) => {
         const result = await sub.exec([
@@ -71,7 +67,7 @@ export const receiveBtcFunding = sdk.Action.withInput(
 
           'BLAKE_SWAP_BTC_CLI=/opt/blake-swap/adapters/btc-rpc-cli',
           'BLAKE_SWAP_BTC_DATADIR=',
-          'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+          ...rpc.btcEnv,
 
           'python3',
           '/opt/blake-swap/src/swap_v2.py',

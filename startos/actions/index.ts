@@ -1,3 +1,5 @@
+import { resumableBtcScan } from './resumableBtcScan'
+import { benchmarkBtcScan } from './benchmarkBtcScan'
 import { sdk } from '../sdk'
 import { verifyEngine } from './verifyEngine'
 import { createPersistenceMarker } from './createPersistenceMarker'
@@ -18,6 +20,7 @@ import { publishBlakeFunding } from './publishBlakeFunding'
 import { receiveBtcFunding } from './receiveBtcFunding'
 import { resumeSwap } from './resumeSwap'
 import { reconcileSwap } from './reconcileSwap'
+import { syncFunding } from './syncFunding'
 import { viewMarket } from './viewMarket'
 import { swapStatus } from './swapStatus'
 import { showParticipantIdentity } from './showParticipantIdentity'
@@ -60,5 +63,8 @@ export const actions = sdk.Actions.of()
   .addAction(publishBlakeFunding)
   .addAction(receiveBtcFunding)
   .addAction(reconcileSwap)
+  .addAction(syncFunding)
+  .addAction(benchmarkBtcScan)
+  .addAction(resumableBtcScan)
   .addAction(resumeSwap)
   .addAction(checkBtcRpc)

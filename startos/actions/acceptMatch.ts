@@ -1,4 +1,5 @@
 import { sdk } from '../sdk'
+import { resolveSwapRpcContext } from '../lib/resolveSwapRpcContext'
 import { i18n } from '../i18n'
 import { getNostrRelayEnv } from '../file-models/nostrRelays'
 import { walletMapping } from '../file-models/walletMapping'
@@ -7,10 +8,6 @@ import { requireBtcEconomicContextReadiness } from '../lib/requireBtcEconomicCon
 import { withSwapEconomicContext } from '../lib/withSwapEconomicContext'
 
 const { InputSpec, Value } = sdk
-
-const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
-const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
-const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
 const inputSpec = InputSpec.of({
   matchId: Value.text({
@@ -98,47 +95,12 @@ export const acceptMatch = sdk.Action.withInput(
 
     const btcWallet = savedMapping?.btcWallet.trim() ?? ''
 
-    const blakeRpcAddr = await sdk.host
-      .getBridgeAddress(effects, {
-        packageId: BLAKE_PROVIDER_PACKAGE_ID,
-        hostId: BLAKE_PROVIDER_RPC_HOST_ID,
-        internalPort: BLAKE_PROVIDER_RPC_INTERNAL_PORT,
-        ssl: false,
-      })
-      .once()
-
-    if (!blakeRpcAddr) {
-      throw new Error(i18n('BLAKE RPC is unavailable.'))
-    }
-
-    /*
-     * Read/write /data is required because accepting a match can:
-     *
-     * - persist market->swap bindings
-     * - create local Alice/Bob swap state
-     * - cache authenticated Nostr evidence
-     *
-     * The BLAKE dependency remains read-only.
-     */
-    const mounts = sdk.Mounts.of()
-      .mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: false,
-      })
-      .mountDependency({
-        dependencyId: BLAKE_PROVIDER_PACKAGE_ID,
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/mnt/bitcoind',
-        readonly: true,
-      })
+    const rpc = await resolveSwapRpcContext(effects)
 
     return sdk.SubContainer.withTemp(
       effects,
       { imageId: 'blake-swap' },
-      mounts,
+      rpc.mounts,
       'accept-match',
       async (sub) => {
         async function runJson(command: string[]): Promise<unknown> {
@@ -165,19 +127,14 @@ export const acceptMatch = sdk.Action.withInput(
             requireBlakeEconomicContextReadiness(effects, runJson, {
               cli: '/opt/blake-swap/adapters/blake-rpc-cli',
               wallet: blakeWallet,
-              env: [
-                `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-                'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
-              ],
+              env: rpc.blakeEnv,
             }),
 
           () =>
             requireBtcEconomicContextReadiness(effects, runJson, {
               cli: '/opt/blake-swap/adapters/btc-rpc-cli',
               wallet: btcWallet,
-              env: [
-                'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
-              ],
+              env: rpc.btcEnv,
             }),
 
           async () => {
@@ -203,10 +160,9 @@ export const acceptMatch = sdk.Action.withInput(
               'BLAKE_SWAP_AUTO_MINE=0',
               'BLAKE_SWAP_BLAKE_NETWORK=main',
 
-              `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-              'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+              ...rpc.blakeEnv,
 
-              'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+              ...rpc.btcEnv,
 
               `BLAKE_SWAP_BLAKE_WALLET=${blakeWallet}`,
               `BLAKE_SWAP_BTC_WALLET=${btcWallet}`,

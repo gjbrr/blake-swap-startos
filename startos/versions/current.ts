@@ -1,16 +1,12 @@
 import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
 export const current = VersionInfo.of({
-  version: '1.0.0:0',
+  version: '1.0.0:9',
   releaseNotes: {
-    en_US: 'Initial release for StartOS',
-    es_ES: 'Lanzamiento inicial para StartOS',
-    de_DE: 'Erstveröffentlichung für StartOS',
-    pl_PL: 'Pierwsze wydanie dla StartOS',
-    fr_FR: 'Version initiale pour StartOS',
+    en_US: 'Add confirmed funding recovery action for interrupted swaps.',
   },
   migrations: {
-    up: async ({ effects }) => {},
+    up: async () => {},
     down: IMPOSSIBLE,
   },
 })

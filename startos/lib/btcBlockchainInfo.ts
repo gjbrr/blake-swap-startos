@@ -1,5 +1,7 @@
 import { sdk } from '../sdk'
 import { btcProvider } from '../file-models/btcProvider'
+import { nodeProviders } from '../file-models/nodeProviders'
+import { planNodeConnections } from './nodeConnectionPlan'
 
 export type BtcBlockchainInfoResult = {
   chain: unknown
@@ -11,13 +13,17 @@ export type BtcBlockchainInfoResult = {
 
 export class BtcBlockchainInfoError extends Error {
   constructor(
-    readonly code: 'provider-not-configured' | 'insecure-url' | 'rpc-failed',
+    readonly code:
+      | 'provider-not-configured'
+      | 'insecure-url'
+      | 'rpc-unavailable'
+      | 'rpc-failed',
   ) {
     super(code)
   }
 }
 
-export async function getBtcBlockchainInfo(
+async function getRemoteBtcBlockchainInfo(
   effects: Parameters<typeof sdk.SubContainer.withTemp>[0],
 ): Promise<BtcBlockchainInfoResult> {
   const saved = await btcProvider.read().const(effects)
@@ -37,7 +43,7 @@ export async function getBtcBlockchainInfo(
       effects,
       { imageId: 'blake-swap' },
       sdk.Mounts.of(),
-      'btc-getblockchaininfo',
+      'btc-getblockchaininfo-remote',
       async (sub) => {
         const python = `
 import base64
@@ -63,14 +69,19 @@ request_body = json.dumps({
     "params": [],
 }).encode()
 
-credentials = (rpc_username + ":" + rpc_password).encode()
+credentials = (
+    rpc_username + ":" + rpc_password
+).encode()
 
 req = urllib.request.Request(
     rpc_url,
     data=request_body,
     headers={
         "Content-Type": "application/json",
-        "Authorization": "Basic " + base64.b64encode(credentials).decode(),
+        "Authorization": (
+            "Basic "
+            + base64.b64encode(credentials).decode()
+        ),
     },
     method="POST",
 )
@@ -80,10 +91,14 @@ with urllib.request.urlopen(
     context=ssl_context,
     timeout=10,
 ) as response:
-    payload = json.loads(response.read().decode())
+    payload = json.loads(
+        response.read().decode()
+    )
 
 if payload.get("error") is not None:
-    raise SystemExit("BTC RPC returned an error")
+    raise SystemExit(
+        "BTC RPC returned an error"
+    )
 
 info = payload["result"]
 
@@ -91,8 +106,10 @@ print(json.dumps({
     "chain": info.get("chain"),
     "blocks": info.get("blocks"),
     "headers": info.get("headers"),
-    "verificationprogress": info.get("verificationprogress"),
-    "initialblockdownload": info.get("initialblockdownload"),
+    "verificationprogress":
+        info.get("verificationprogress"),
+    "initialblockdownload":
+        info.get("initialblockdownload"),
 }))
 `.trim()
 
@@ -116,4 +133,153 @@ print(json.dumps({
   } catch {
     throw new BtcBlockchainInfoError('rpc-failed')
   }
+}
+
+async function getLocalBtcBlockchainInfo(
+  effects: Parameters<typeof sdk.SubContainer.withTemp>[0],
+  connection: Extract<
+    ReturnType<typeof planNodeConnections>['btc'],
+    { mode: 'local' }
+  >,
+): Promise<BtcBlockchainInfoResult> {
+  const rpcAddr = await sdk.host
+    .getBridgeAddress(effects, {
+      packageId: connection.packageId,
+      hostId: connection.hostId,
+      internalPort: connection.internalPort,
+      ssl: false,
+    })
+    .once()
+
+  if (!rpcAddr) {
+    throw new BtcBlockchainInfoError('rpc-unavailable')
+  }
+
+  if (!connection.cookieRelativePath) {
+    throw new BtcBlockchainInfoError('rpc-unavailable')
+  }
+
+  const mountpoint = connection.dependencyMountpoint
+
+  const mounts = sdk.Mounts.of().mountDependency({
+    dependencyId: connection.packageId,
+    volumeId: 'main',
+    subpath: null,
+    mountpoint,
+    readonly: true,
+  })
+
+  try {
+    return await sdk.SubContainer.withTemp(
+      effects,
+      { imageId: 'blake-swap' },
+      mounts,
+      'btc-getblockchaininfo-local',
+      async (sub) => {
+        const python = `
+import base64
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+rpc_addr = sys.argv[1]
+cookie_path = Path(sys.argv[2])
+
+if not cookie_path.is_file():
+    raise SystemExit(
+        "BTC RPC cookie is unavailable"
+    )
+
+cookie = cookie_path.read_text().strip()
+
+request_body = json.dumps({
+    "jsonrpc": "1.0",
+    "id": "blake-swap-startos-btc-local",
+    "method": "getblockchaininfo",
+    "params": [],
+}).encode()
+
+req = urllib.request.Request(
+    "http://" + rpc_addr + "/",
+    data=request_body,
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": (
+            "Basic "
+            + base64.b64encode(
+                cookie.encode()
+            ).decode()
+        ),
+    },
+    method="POST",
+)
+
+with urllib.request.urlopen(
+    req,
+    timeout=10,
+) as response:
+    payload = json.loads(
+        response.read().decode()
+    )
+
+if payload.get("error") is not None:
+    raise SystemExit(
+        "BTC RPC returned an error"
+    )
+
+info = payload["result"]
+
+print(json.dumps({
+    "chain": info.get("chain"),
+    "blocks": info.get("blocks"),
+    "headers": info.get("headers"),
+    "verificationprogress":
+        info.get("verificationprogress"),
+    "initialblockdownload":
+        info.get("initialblockdownload"),
+}))
+`.trim()
+
+        const cookiePath = `${mountpoint}/${connection.cookieRelativePath}`
+
+        const execResult = await sub.exec([
+          'python3',
+          '-c',
+          python,
+          rpcAddr,
+          cookiePath,
+        ])
+
+        if (execResult.exitCode !== 0) {
+          throw new Error('RPC failed')
+        }
+
+        return JSON.parse(
+          execResult.stdout.toString(),
+        ) as BtcBlockchainInfoResult
+      },
+    )
+  } catch {
+    throw new BtcBlockchainInfoError('rpc-failed')
+  }
+}
+
+export async function getBtcBlockchainInfo(
+  effects: Parameters<typeof sdk.SubContainer.withTemp>[0],
+): Promise<BtcBlockchainInfoResult> {
+  const selection = await nodeProviders.read().const(effects)
+
+  const effectiveSelection = selection ?? {
+    btc: 'remote-rpc' as const,
+    blake: 'local-knots-blake2b' as const,
+  }
+
+  const connection = planNodeConnections(effectiveSelection).btc
+
+  if (connection.mode === 'remote') {
+    return getRemoteBtcBlockchainInfo(effects)
+  }
+
+  return getLocalBtcBlockchainInfo(effects, connection)
 }

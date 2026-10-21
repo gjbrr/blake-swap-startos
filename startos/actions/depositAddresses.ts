@@ -1,10 +1,7 @@
 import { sdk } from '../sdk'
+import { resolveSwapRpcContext } from '../lib/resolveSwapRpcContext'
 import { i18n } from '../i18n'
 import { walletMapping } from '../file-models/walletMapping'
-
-const BLAKE_PROVIDER_PACKAGE_ID = 'bitcoind'
-const BLAKE_PROVIDER_RPC_HOST_ID = 'rpc'
-const BLAKE_PROVIDER_RPC_INTERNAL_PORT = 8332
 
 function parseAddress(stdout: string, chain: 'BLAKE' | 'BTC'): string {
   const address = stdout.trim()
@@ -48,44 +45,17 @@ export const getBlakeDepositAddress = sdk.Action.withoutInput(
       )
     }
 
-    const blakeRpcAddr = await sdk.host
-      .getBridgeAddress(effects, {
-        packageId: BLAKE_PROVIDER_PACKAGE_ID,
-        hostId: BLAKE_PROVIDER_RPC_HOST_ID,
-        internalPort: BLAKE_PROVIDER_RPC_INTERNAL_PORT,
-        ssl: false,
-      })
-      .once()
-
-    if (!blakeRpcAddr) {
-      throw new Error(i18n('BLAKE RPC is unavailable.'))
-    }
-
-    const mounts = sdk.Mounts.of()
-      .mountVolume({
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/data',
-        readonly: true,
-      })
-      .mountDependency({
-        dependencyId: BLAKE_PROVIDER_PACKAGE_ID,
-        volumeId: 'main',
-        subpath: null,
-        mountpoint: '/mnt/bitcoind',
-        readonly: true,
-      })
+    const rpc = await resolveSwapRpcContext(effects)
 
     const address = await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'blake-swap' },
-      mounts,
+      rpc.mounts,
       'get-blake-deposit-address',
       async (sub) => {
         const result = await sub.exec([
           '/usr/bin/env',
-          `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-          'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+          ...rpc.blakeEnv,
 
           '/opt/blake-swap/adapters/blake-rpc-cli',
           `-rpcwallet=${wallet}`,
@@ -103,8 +73,7 @@ export const getBlakeDepositAddress = sdk.Action.withoutInput(
 
         const verify = await sub.exec([
           '/usr/bin/env',
-          `BLAKE_SWAP_BLAKE_RPC_URL=http://${blakeRpcAddr}/`,
-          'BLAKE_SWAP_BLAKE_COOKIE_PATH=/mnt/bitcoind/.cookie',
+          ...rpc.blakeEnv,
 
           '/opt/blake-swap/adapters/blake-rpc-cli',
           `-rpcwallet=${wallet}`,
@@ -182,22 +151,17 @@ export const getBtcDepositAddress = sdk.Action.withoutInput(
       )
     }
 
-    const mounts = sdk.Mounts.of().mountVolume({
-      volumeId: 'main',
-      subpath: null,
-      mountpoint: '/data',
-      readonly: true,
-    })
+    const rpc = await resolveSwapRpcContext(effects)
 
     const address = await sdk.SubContainer.withTemp(
       effects,
       { imageId: 'blake-swap' },
-      mounts,
+      rpc.mounts,
       'get-btc-deposit-address',
       async (sub) => {
         const result = await sub.exec([
           '/usr/bin/env',
-          'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+          ...rpc.btcEnv,
 
           '/opt/blake-swap/adapters/btc-rpc-cli',
           `-rpcwallet=${wallet}`,
@@ -215,7 +179,7 @@ export const getBtcDepositAddress = sdk.Action.withoutInput(
 
         const verify = await sub.exec([
           '/usr/bin/env',
-          'BLAKE_SWAP_BTC_PROVIDER_CONFIG=/data/config/btc-provider.json',
+          ...rpc.btcEnv,
 
           '/opt/blake-swap/adapters/btc-rpc-cli',
           `-rpcwallet=${wallet}`,

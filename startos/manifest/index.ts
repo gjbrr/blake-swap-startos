@@ -25,8 +25,14 @@ export const manifest = setupManifest({
   },
   dependencies: {
     bitcoind: {
-      description: 'Provides the Bitcoin Blake2b blockchain backend for XBT/BTC Atomic Swap.',
-      optional: false,
+      description:
+        'Local Bitcoin node; chain assignment requires verification.',
+      optional: true,
+      s9pk: null,
+    },
+    'knots-blake2b': {
+      description: 'Local Bitcoin Knots Blake2b Companion for the BLAKE chain.',
+      optional: true,
       s9pk: null,
     },
   },
