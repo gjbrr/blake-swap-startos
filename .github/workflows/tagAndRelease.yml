@@ -10,7 +10,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A green run should say what happened. Without a job that always runs, skipping the release
+  # would leave the check grey and silent; this one reports the configuration state and
+  # succeeds either way.
+  config:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report the release configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.REFERENCE_REGISTRY }}" ]; then
+            echo "::notice::Tag and Release is skipped: vars.REFERENCE_REGISTRY is not set."
+            echo "Set the three repository variables and the three release secrets listed in"
+            echo "TODO.md to enable tagging; nothing else in this workflow can run without them."
+          else
+            echo "Release configuration is present; the tag job will run."
+          fi
+
   tag:
+    needs: config
     # The reusable workflow needs a reference registry and a developer signing key: it checks
     # that the version is not taken and signs the package before tagging it. Neither the
     # variables nor the secrets exist on this repository yet (the package is a private alpha
