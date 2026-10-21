@@ -69,6 +69,7 @@ EXPECT_LAST_SHARED=00000000000000000001bbc439e13f749dca850d32c7a2834165338713027
 CORE_RPC_PORT=8432
 CORE_P2P_PORT=8433
 CORE_DBCACHE=1200
+CORE_MAXCONN=16
 MODE=auto                     # auto | hardlink | reflink
 TXINDEX=0                     # opt-in: needed only for arbitrary getrawtransaction
 DRY_RUN=0
@@ -96,6 +97,7 @@ Options:
   --rpc-port N           Core RPC port (default: $CORE_RPC_PORT)
   --p2p-port N           Core P2P port (default: $CORE_P2P_PORT)
   --dbcache N            Core dbcache in MiB (default: $CORE_DBCACHE)
+  --maxconnections N     Core peer limit (default: $CORE_MAXCONN)
   --mode MODE            auto | hardlink | reflink (default: $MODE)
   --txindex              Also build a full transaction index (~45 GB). Only
                          needed for getrawtransaction by txid, e.g. a gateway
@@ -126,6 +128,7 @@ while [ $# -gt 0 ]; do
         --rpc-port)     CORE_RPC_PORT=$2; shift 2 ;;
         --p2p-port)     CORE_P2P_PORT=$2; shift 2 ;;
         --dbcache)      CORE_DBCACHE=$2; shift 2 ;;
+        --maxconnections) CORE_MAXCONN=$2; shift 2 ;;
         --mode)         MODE=$2; shift 2 ;;
         --txindex)      TXINDEX=1; shift ;;
         --dry-run)      DRY_RUN=1; shift ;;
@@ -399,6 +402,9 @@ rpcallowip=127.0.0.1
 
 # Both nodes plus both chainstates have to fit in RAM.
 dbcache=$CORE_DBCACHE
+
+# Keep the peer count modest when both nodes share one link.
+maxconnections=$CORE_MAXCONN
 
 # Pre-fork history was validated by the Knots node and is checkpointed at
 # $LAST_SHARED_HEIGHT; skip script checks below it, validate $FORK_HEIGHT.. normally.

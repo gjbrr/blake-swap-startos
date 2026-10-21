@@ -77,7 +77,10 @@ bitcoin-cli -datadir=$HOME/.bitcoin-core -rpcport=8432 getblockchaininfo
 ```
 
 Useful options: `--core-datadir`, `--mode hardlink|reflink`, `--rpc-port`,
-`--p2p-port`, `--dbcache`, `--txindex`, `--start`.
+`--p2p-port`, `--dbcache`, `--maxconnections`, `--txindex`, `--start`.
+
+The generated config keeps `maxconnections=16` and `dbcache=1200` so the Core
+node leaves room for a co-resident Knots node.
 
 Requirements: same filesystem for both datadirs, the Knots node running with
 RPC access, `python3`, and a `bitcoin-cli` next to the Core binary.
