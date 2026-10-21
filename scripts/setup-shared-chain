@@ -1,0 +1,434 @@
+#!/usr/bin/env bash
+# setup-shared-chain — provision a stock Bitcoin Core node that shares the
+# pre-fork block files of a synced BLAKE2b Knots node.
+#
+# WHY
+#   BLAKE2b Knots is Bitcoin Knots v29.4.2 with a mainnet PoW hard fork: blocks
+#   up to height 961639 are ordinary SHA256d Bitcoin blocks, blocks from 961640
+#   use BLAKE2b. A stock Bitcoin Core node therefore stores a byte-identical
+#   copy of every pre-fork block. This script hands those files to a second
+#   datadir instead of duplicating ~700 GB of history.
+#
+# WHAT IS VERIFIED, NOT ASSUMED
+#   File numbers do not track height: blk*.dat rotate on size and blocks are
+#   written in arrival order, so a reorg or a different peer set can put the
+#   fork-point data in a different file than the height suggests. This script
+#   therefore reads every record header of every blk file and checks the header
+#   proof of work as SHA256d:
+#
+#     - a file whose blocks all satisfy SHA256d PoW is pre-fork history and is
+#       safe to share; it gets hardlinked (or reflinked) into the Core datadir
+#     - a file with any BLAKE2b (non-SHA256d) block is divergent data; it is
+#       copied, never linked, so Core reads what it can from it and nothing else
+#       ever writes to it
+#     - a file with no SHA256d block at all is post-fork only and is skipped;
+#       Core downloads its own post-fork chain anyway
+#     - the newest blk file is always copied, because it is the file the Knots
+#       node is still appending to
+#
+#   Each file's block-hash digest is written to the manifest, so a later run can
+#   tell whether a source file changed.
+#
+# WHAT IS NOT SHAREABLE
+#   blocks/index/ and chainstate/ are LevelDB. They cannot be hardlinked and are
+#   per-chain anyway; Core rebuilds both from the shared block files during
+#   -reindex. rev*.dat (undo data) is also per-node: Core rebuilds it too.
+#
+# HOW THE XOR KEY MATTERS
+#   Core 28+ XOR-obfuscates every blk*.dat with a per-datadir key in
+#   blocks/xor.dat. The script copies that key into the Core datadir and Core
+#   uses it for every file it reads or creates, so shared files decode on both
+#   sides. Without the copied key the shared files would be unreadable.
+#
+# WHAT IT LEAVES BEHIND
+#   <core-datadir>/bitcoin.conf        full node, BIP-157 filters (txindex opt-in)
+#   <core-datadir>/blocks/             linked pre-fork blk files + private copies
+#   <core-datadir>/blocks/.shared-chain-manifest
+#
+# NEXT STEP
+#   Start Core with -reindex the first time. It rebuilds its block index,
+#   chainstate and filter index from the shared files, then syncs 961640.. on
+#   the SHA256d chain from its own peers.
+#
+# Requirements: a synced BLAKE2b Knots node with RPC access, and both datadirs
+# on the same filesystem (hardlinks cannot cross devices; btrfs/XFS reflinks are
+# used when available, including across subvolumes).
+#
+# The verification pass reads the magic/size preamble and the 80-byte header of
+# every block (~1M seeks, a few minutes); it does not read block payloads.
+
+set -euo pipefail
+
+PROG=${0##*/}
+
+FORK_DATADIR=${HOME}/.bitcoin
+CORE_DATADIR=${HOME}/.bitcoin-core
+FORK_HEIGHT=961640            # first BLAKE2b block
+LAST_SHARED_HEIGHT=$((FORK_HEIGHT - 1))
+EXPECT_LAST_SHARED=00000000000000000001bbc439e13f749dca850d32c7a2834165338713027e65  # blk 961639
+CORE_RPC_PORT=8432
+CORE_P2P_PORT=8433
+CORE_DBCACHE=1200
+MODE=auto                     # auto | hardlink | reflink
+TXINDEX=0                     # opt-in: needed only for arbitrary getrawtransaction
+DRY_RUN=0
+START=0
+FORK_CLI=
+CORE_BIN=
+CORE_CLI=
+
+usage() {
+    cat <<EOF
+Usage: $PROG [options]
+
+Provisions a Bitcoin Core datadir that shares the verified pre-fork block files
+of a synced BLAKE2b Knots node (mainnet, hard fork at height $FORK_HEIGHT).
+
+Options:
+  --fork-datadir DIR     Knots datadir (default: \$HOME/.bitcoin)
+  --core-datadir DIR     Core datadir to create (default: \$HOME/.bitcoin-core)
+  --fork-cli PATH        bitcoin-cli for the Knots node (auto-detected)
+  --core-bin PATH        bitcoind for Core (auto-detected)
+  --core-cli PATH        bitcoin-cli for Core (auto-detected from --core-bin)
+  --fork-height N        First post-fork height (default: $FORK_HEIGHT)
+  --expect-last-shared H Block hash expected at height N-1, "none" to skip
+                         (default: the BLAKE2b checkpoint for 961639)
+  --rpc-port N           Core RPC port (default: $CORE_RPC_PORT)
+  --p2p-port N           Core P2P port (default: $CORE_P2P_PORT)
+  --dbcache N            Core dbcache in MiB (default: $CORE_DBCACHE)
+  --mode MODE            auto | hardlink | reflink (default: $MODE)
+  --txindex              Also build a full transaction index (~45 GB). Only
+                         needed for getrawtransaction by txid, e.g. a gateway
+                         API. BIP-157 filters do not use it.
+  --dry-run              Scan and print the plan, change nothing
+  --start                Launch Core with -reindex after provisioning
+  -h, --help             This text
+
+The Knots node must already have passed the fork height, i.e. it must have
+written block $FORK_HEIGHT. The script reads that over RPC and refuses
+otherwise: until then the newest files are still being appended to.
+EOF
+}
+
+log()  { printf '  %s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --fork-datadir) FORK_DATADIR=$2; shift 2 ;;
+        --core-datadir) CORE_DATADIR=$2; shift 2 ;;
+        --fork-cli)     FORK_CLI=$2; shift 2 ;;
+        --core-bin)     CORE_BIN=$2; shift 2 ;;
+        --core-cli)     CORE_CLI=$2; shift 2 ;;
+        --fork-height)  FORK_HEIGHT=$2; shift 2 ;;
+        --expect-last-shared) EXPECT_LAST_SHARED=$2; shift 2 ;;
+        --rpc-port)     CORE_RPC_PORT=$2; shift 2 ;;
+        --p2p-port)     CORE_P2P_PORT=$2; shift 2 ;;
+        --dbcache)      CORE_DBCACHE=$2; shift 2 ;;
+        --mode)         MODE=$2; shift 2 ;;
+        --txindex)      TXINDEX=1; shift ;;
+        --dry-run)      DRY_RUN=1; shift ;;
+        --start)        START=1; shift ;;
+        -h|--help)      usage; exit 0 ;;
+        *)              die "unknown option: $1 (try --help)" ;;
+    esac
+done
+
+case $MODE in auto|hardlink|reflink) ;; *) die "--mode must be auto, hardlink or reflink" ;; esac
+case $FORK_HEIGHT in ''|*[!0-9]*) die "--fork-height must be a number" ;; esac
+LAST_SHARED_HEIGHT=$((FORK_HEIGHT - 1))
+[ "$LAST_SHARED_HEIGHT" -ge 0 ] || die "--fork-height must be >= 1"
+command -v python3 >/dev/null || die "python3 is required for the block scan"
+
+# ---------------------------------------------------------------- binaries ---
+first_existing() {
+    local p
+    for p in "$@"; do
+        [ -n "$p" ] && [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
+}
+
+if [ -z "$FORK_CLI" ]; then
+    FORK_CLI=$(first_existing \
+        "$(command -v bitcoin-cli 2>/dev/null || true)" \
+        "$HOME/s/bitcoin-blake2b/bin/bitcoin-cli" \
+        "$HOME/s/bitcoinknots/bitcoin/build/bin/bitcoin-cli") \
+        || die "cannot find the Knots bitcoin-cli; pass --fork-cli"
+fi
+if [ -z "$CORE_BIN" ]; then
+    CORE_BIN=$(first_existing \
+        "$(command -v bitcoind 2>/dev/null || true)" \
+        "$HOME/s/bitcoin-core/bin/bitcoind" \
+        "$HOME/s/btc-fork-sim/bitcoin-30.3/build/bin/bitcoind") \
+        || die "cannot find a stock bitcoind; pass --core-bin"
+fi
+if [ -z "$CORE_CLI" ]; then
+    CORE_CLI=$(first_existing \
+        "$(dirname "$CORE_BIN")/bitcoin-cli" \
+        "$(command -v bitcoin-cli 2>/dev/null || true)") \
+        || die "cannot find bitcoin-cli next to $CORE_BIN; pass --core-cli"
+fi
+
+fork_cli() { "$FORK_CLI" -datadir="$FORK_DATADIR" "$@"; }
+
+# ------------------------------------------------------------- preconditions ---
+[ -d "$FORK_DATADIR/blocks" ] || die "no blocks dir at $FORK_DATADIR/blocks"
+[ -f "$FORK_DATADIR/blocks/xor.dat" ] || die "no $FORK_DATADIR/blocks/xor.dat (Core < 28 datadir?)"
+SRC_BLOCKS=$FORK_DATADIR/blocks
+DST_BLOCKS=$CORE_DATADIR/blocks
+
+fork_cli getblockcount >/dev/null 2>&1 \
+    || die "cannot reach the Knots node RPC (start it and check -datadir/-rpcport)"
+
+HEIGHT=$(fork_cli getblockcount)
+log "Knots node height: $HEIGHT"
+[ "$HEIGHT" -gt "$FORK_HEIGHT" ] || die \
+    "the Knots node has not passed the fork height yet ($HEIGHT <= $FORK_HEIGHT).
+       Let its IBD finish first: files only stop growing once the node is
+       writing past $FORK_HEIGHT."
+
+LAST_SHARED_HASH=$(fork_cli getblockhash "$LAST_SHARED_HEIGHT")
+log "block $LAST_SHARED_HEIGHT: $LAST_SHARED_HASH"
+if [ "$EXPECT_LAST_SHARED" != none ] && [ "$EXPECT_LAST_SHARED" != "$LAST_SHARED_HASH" ]; then
+    die "block $LAST_SHARED_HEIGHT is $LAST_SHARED_HASH but the BLAKE2b checkpoint is
+       $EXPECT_LAST_SHARED. The Knots node is not on the expected chain (or
+       --fork-height is wrong). Pass --expect-last-shared none to override."
+fi
+
+if [ -d "$DST_BLOCKS/index" ]; then
+    die "$DST_BLOCKS/index exists: that datadir already has a block index.
+       This script only seeds a fresh Core datadir."
+fi
+if [ -f "$DST_BLOCKS/.shared-chain-manifest" ] && [ "$DRY_RUN" -eq 0 ]; then
+    log "already provisioned: $DST_BLOCKS/.shared-chain-manifest"
+    log "remove $CORE_DATADIR to start over"
+    exit 0
+fi
+
+mkdir -p "$(dirname "$CORE_DATADIR")"
+SRC_DEV=$(stat -c %d "$SRC_BLOCKS")
+DST_DEV=$(stat -c %d "$(dirname "$CORE_DATADIR")")
+[ "$SRC_DEV" = "$DST_DEV" ] || die \
+    "$SRC_BLOCKS and $CORE_DATADIR are on different filesystems; sharing needs
+       one filesystem (or one btrfs/XFS filesystem with reflink support)."
+
+if [ "$MODE" = auto ]; then
+    probe=$(mktemp "${TMPDIR:-/tmp}/reflink-probe.XXXXXX")
+    if cp --reflink=always "$SRC_BLOCKS/xor.dat" "$probe" 2>/dev/null; then
+        MODE=reflink
+    else
+        MODE=hardlink
+    fi
+    rm -f "$probe"
+    log "mode: $MODE (auto-detected)"
+else
+    log "mode: $MODE"
+fi
+
+# ------------------------------------------------------- verify every file ---
+# Emits one line per blk file: <class> <records> <bad> <digest> <file>
+#   pure  - every block satisfies SHA256d PoW (pre-fork history)
+#   mixed - some blocks are BLAKE2b (divergent data present)
+#   post  - no SHA256d block at all
+scan_blocks() {
+    python3 - "$SRC_BLOCKS" "$@" <<'PY'
+import sys, os, struct, hashlib
+
+blocks_dir = sys.argv[1]
+files = sys.argv[2:]
+key = open(os.path.join(blocks_dir, 'xor.dat'), 'rb').read()
+if len(key) != 8:
+    sys.exit("xor.dat must be 8 bytes")
+MAGIC = 0xd9b4bef9
+MAX_BLOCK_SERIALIZED_SIZE = 4_000_000
+
+def deob(buf, off):
+    return bytes(b ^ key[(off + i) % 8] for i, b in enumerate(buf))
+
+def target_from_bits(bits):
+    exp, mant = bits >> 24, bits & 0x007fffff
+    if exp <= 3:
+        return mant >> (8 * (3 - exp))
+    return mant << (8 * (exp - 3))
+
+for n, fn in enumerate(files, 1):
+    path = os.path.join(blocks_dir, fn)
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        continue
+    fd = os.open(path, os.O_RDONLY)
+    off, good, bad = 0, 0, 0
+    digest = hashlib.sha256()
+    try:
+        while off + 88 <= size:
+            pre = os.pread(fd, 8, off)
+            if len(pre) < 8:
+                break
+            magic, length = struct.unpack('<II', deob(pre, off))
+            if magic != MAGIC or length < 80 or length > MAX_BLOCK_SERIALIZED_SIZE:
+                break
+            hdr = deob(os.pread(fd, 80, off + 8), off + 8)
+            h = hashlib.sha256(hashlib.sha256(hdr).digest()).digest()
+            digest.update(h)
+            bits = struct.unpack('<I', hdr[72:76])[0]
+            target = target_from_bits(bits)
+            if 0 < int.from_bytes(h, 'little') <= target:
+                good += 1
+            else:
+                bad += 1
+            off += 8 + length
+    finally:
+        os.close(fd)
+    cls = 'pure' if bad == 0 and good else ('post' if good == 0 else 'mixed')
+    print(cls, good + bad, bad, digest.hexdigest()[:32], fn, sep='\t')
+    if n % 25 == 0:
+        print(f"scanned {n}/{len(files)} files", file=sys.stderr)
+PY
+}
+
+# Snapshot the file list before scanning: the Knots node keeps writing, and the
+# newest file must stay the one we copy, not one that appeared mid-scan.
+mapfile -t BLK_FILES < <(find "$SRC_BLOCKS" -maxdepth 1 -name 'blk[0-9]*.dat' -printf '%f\n' | sort)
+BLK_COUNT=${#BLK_FILES[@]}
+[ "$BLK_COUNT" -ge 2 ] || die "need at least two blk files in $SRC_BLOCKS"
+
+log "verifying block headers (reads preambles and headers only)..."
+SCAN=$(scan_blocks "${BLK_FILES[@]}")
+echo "$SCAN" | awk -F'\t' '{c[$1]++} END {
+    printf "  files: %d pre-fork, %d mixed, %d post-fork\n", c["pure"], c["mixed"], c["post"]
+}'
+
+# --------------------------------------------------------------- the file set ---
+NEWEST=${BLK_FILES[$((BLK_COUNT - 1))]}
+
+LINK_FILES=()   # verified pre-fork, hardlink/reflink
+COPY_FILES=()   # mixed or newest, private copy
+SKIP_FILES=()   # post-fork only
+SHARED_BYTES=0
+COPY_BYTES=0
+
+while IFS=$'\t' read -r cls records bad digest name; do
+    [ -n "$name" ] || continue
+    size=$(stat -c %s "$SRC_BLOCKS/$name")
+    if [ "$name" = "$NEWEST" ]; then
+        COPY_FILES+=("$name"); COPY_BYTES=$((COPY_BYTES + size))
+    elif [ "$cls" = pure ]; then
+        LINK_FILES+=("$name"); SHARED_BYTES=$((SHARED_BYTES + size))
+    elif [ "$cls" = mixed ]; then
+        COPY_FILES+=("$name"); COPY_BYTES=$((COPY_BYTES + size))
+    else
+        SKIP_FILES+=("$name")
+    fi
+done <<< "$SCAN"
+
+FREE_BYTES=$(df --output=avail -B1 "$(dirname "$CORE_DATADIR")" | tail -1 | tr -d ' ')
+log "share: ${#LINK_FILES[@]} files, $((SHARED_BYTES / 1024 / 1024 / 1024)) GiB (one copy for both nodes)"
+log "private copies: ${#COPY_FILES[@]} files, $((COPY_BYTES / 1024 / 1024)) MiB"
+log "skipped: ${#SKIP_FILES[@]} post-fork files (Core syncs its own)"
+log "free on target filesystem: $((FREE_BYTES / 1024 / 1024 / 1024)) GiB"
+[ "$FREE_BYTES" -gt "$COPY_BYTES" ] || die "not enough free space for the private copies"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo
+    echo "dry run: nothing written."
+    printf 'would link: %s\n' "${LINK_FILES[*]:-none}"
+    printf 'would copy: %s\n' "${COPY_FILES[*]:-none}"
+    exit 0
+fi
+
+# ---------------------------------------------------------------- do the work ---
+mkdir -p "$DST_BLOCKS"
+cp -f "$SRC_BLOCKS/xor.dat" "$DST_BLOCKS/xor.dat"
+log "copied blocksdir XOR key"
+
+put_file() {
+    local src=$1 dst=$2 mode=$3
+    if [ -e "$dst" ]; then
+        [ "$(stat -c %s "$src")" = "$(stat -c %s "$dst")" ] \
+            || die "$dst exists and differs in size from $src"
+        return 0
+    fi
+    case $mode in
+        hardlink) ln -- "$src" "$dst" ;;
+        reflink)  cp --reflink=always -- "$src" "$dst" ;;
+        copy)     cp --reflink=auto -- "$src" "$dst" ;;
+    esac
+}
+
+for name in "${LINK_FILES[@]}"; do
+    put_file "$SRC_BLOCKS/$name" "$DST_BLOCKS/$name" "$MODE"
+done
+log "linked ${#LINK_FILES[@]} verified pre-fork files"
+
+for name in "${COPY_FILES[@]}"; do
+    put_file "$SRC_BLOCKS/$name" "$DST_BLOCKS/$name" copy
+done
+log "copied ${#COPY_FILES[@]} files privately (newest and divergent)"
+
+if [ "$TXINDEX" -eq 1 ]; then
+    TXINDEX_CONF=$'txindex=1'
+else
+    TXINDEX_CONF=$'# txindex=0: BIP-157 filters do not need it; enable with --txindex only\n# for arbitrary getrawtransaction by txid.'
+fi
+
+cat > "$CORE_DATADIR/bitcoin.conf" <<EOF
+# Generated by $PROG for a Bitcoin Core node sharing the SHA256d history of a
+# BLAKE2b Knots node up to block $LAST_SHARED_HEIGHT.
+# First start needs -reindex: it rebuilds the block index, chainstate and filter
+# index from the shared blk files, then syncs $FORK_HEIGHT.. on the SHA256d chain.
+
+server=1
+listen=1
+discover=1
+prune=0
+
+# BIP-157/158 compact block filters (basic type) + serve them to peers.
+# Filters index scripts and need only block data, not txindex.
+blockfilterindex=1
+peerblockfilters=1
+$TXINDEX_CONF
+
+# Its own ports: the Knots node already owns 8333/8332 (+8334 for Tor).
+port=$CORE_P2P_PORT
+rpcport=$CORE_RPC_PORT
+rpcbind=127.0.0.1
+rpcallowip=127.0.0.1
+
+# Both nodes plus both chainstates have to fit in RAM.
+dbcache=$CORE_DBCACHE
+
+# Pre-fork history was validated by the Knots node and is checkpointed at
+# $LAST_SHARED_HEIGHT; skip script checks below it, validate $FORK_HEIGHT.. normally.
+assumevalid=$LAST_SHARED_HASH
+EOF
+log "wrote $CORE_DATADIR/bitcoin.conf"
+
+{
+    echo "source_datadir=$FORK_DATADIR"
+    echo "source_height=$HEIGHT"
+    echo "fork_height=$FORK_HEIGHT"
+    echo "last_shared_height=$LAST_SHARED_HEIGHT"
+    echo "last_shared_hash=$LAST_SHARED_HASH"
+    echo "mode=$MODE"
+    echo "txindex=$TXINDEX"
+    echo "# class records bad digest file"
+    echo "$SCAN"
+} > "$DST_BLOCKS/.shared-chain-manifest"
+log "wrote $DST_BLOCKS/.shared-chain-manifest"
+
+echo
+echo "next:"
+echo "  $CORE_BIN -datadir=$CORE_DATADIR -reindex -daemon"
+echo "  $CORE_CLI -datadir=$CORE_DATADIR getblockchaininfo"
+echo
+echo "the first start reindexes the shared history from local disk; it builds its"
+echo "own chainstate, block index and filters, then syncs only $FORK_HEIGHT.. plus"
+echo "its own post-fork blocks."
+
+if [ "$START" -eq 1 ]; then
+    "$CORE_BIN" -datadir="$CORE_DATADIR" -reindex -daemon
+    log "started: $CORE_CLI -datadir=$CORE_DATADIR getindexinfo"
+fi
