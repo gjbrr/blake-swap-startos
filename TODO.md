@@ -205,3 +205,16 @@ them, and add items when you defer work.
       exposes an interface).
 - [ ] Backup / restore sanity check.
 - [ ] Review the README and instructions one more time against actual behavior.
+
+## CI configuration
+
+- [ ] Set `vars.REFERENCE_REGISTRY`, `vars.RELEASE_REGISTRY` and
+      `vars.S3_S9PKS_BASE_URL`, plus `secrets.DEV_KEY`, `secrets.S3_ACCESS_KEY`
+      and `secrets.S3_SECRET_KEY`, then the Tag and Release workflow runs again.
+      Until then it is skipped: with those values empty it failed every push in
+      ten seconds inside `start-cli` (exit 38) over a release pipeline that was
+      never set up, which is a red check that says nothing about the package.
+- [ ] Add a build check that runs on pushes to `master` once the package builds
+      (`make` / `start-cli s9pk pack`); the Build workflow currently runs only
+      for pull requests and manual dispatch.
+

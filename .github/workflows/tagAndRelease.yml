@@ -11,6 +11,18 @@ concurrency:
 
 jobs:
   tag:
+    # The reusable workflow needs a reference registry and a developer signing key: it checks
+    # that the version is not taken and signs the package before tagging it. Neither the
+    # variables nor the secrets exist on this repository yet (the package is a private alpha
+    # with no release pipeline), and passing the empty values through made every push fail in
+    # ten seconds with `start-cli` exit 38 — a red check that said nothing about the package.
+    #
+    # So the release only runs where it can: when the reference registry is configured. Set
+    #   vars.REFERENCE_REGISTRY, vars.RELEASE_REGISTRY, vars.S3_S9PKS_BASE_URL
+    #   secrets.DEV_KEY, secrets.S3_ACCESS_KEY, secrets.S3_SECRET_KEY
+    # and this job starts running again. Until then a push tags nothing and reports nothing
+    # instead of failing a build over a pipeline that was never set up.
+    if: ${{ vars.REFERENCE_REGISTRY != '' }}
     uses: Start9Labs/start-technologies/.github/workflows/tagAndRelease.yml@master
     with:
       REFERENCE_REGISTRY: ${{ vars.REFERENCE_REGISTRY }}
