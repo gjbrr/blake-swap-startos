@@ -1,7 +1,20 @@
 import { sdk } from '../sdk'
 import { resolveSwapRpcContext } from '../lib/resolveSwapRpcContext'
 
-export const resumableBtcScan = sdk.Action.withoutInput(
+const { InputSpec, Value } = sdk
+
+const inputSpec = InputSpec.of({
+  swapId: Value.text({
+    name: 'Swap ID',
+    description: 'Exact 12-character ID of the swap to scan.',
+    required: true,
+    default: null,
+    placeholder: 'a7e0cfd40bda',
+    masked: false,
+  }),
+})
+
+export const resumableBtcScan = sdk.Action.withInput(
   'resumable-btc-scan',
 
   async () => ({
@@ -16,7 +29,17 @@ export const resumableBtcScan = sdk.Action.withoutInput(
     access: 'user',
   }),
 
-  async ({ effects }) => {
+  inputSpec,
+
+  async () => null,
+
+  async ({ effects, input }) => {
+    const swapId = input.swapId.trim().toLowerCase()
+
+    if (!/^[0-9a-f]{12}$/.test(swapId)) {
+      throw new Error('Swap ID must be exactly 12 hexadecimal characters.')
+    }
+
     const rpc = await resolveSwapRpcContext(effects)
 
     const resultText = await sdk.SubContainer.withTemp(
@@ -28,6 +51,7 @@ export const resumableBtcScan = sdk.Action.withoutInput(
         const result = await sub.exec([
           '/usr/bin/env',
           'PYTHONPATH=/opt/blake-swap/src',
+          `BLAKE_SWAP_DIAGNOSTIC_SWAP_ID=${swapId}`,
           'BLAKE_SWAP_STATE_DIR=/data/swaps',
           'BLAKE_SWAP_BTC_CLI=/opt/blake-swap/adapters/btc-rpc-cli',
           'BLAKE_SWAP_BTC_DATADIR=',

@@ -21,8 +21,13 @@ from swap_v2 import (
     derive_btc_contract_address,
 )
 
-SWAP_ID = "2876be80e78b"
-BATCH_SIZE = 100
+SWAP_ID = os.environ.get("BLAKE_SWAP_DIAGNOSTIC_SWAP_ID", "").strip().lower()
+
+if not re.fullmatch(r"[0-9a-f]{12}", SWAP_ID):
+    raise RuntimeError(
+        "BLAKE_SWAP_DIAGNOSTIC_SWAP_ID must be a 12-character hexadecimal swap ID"
+    )
+BATCH_SIZE = 10
 
 root = Path("/data/diagnostics")
 progress_path = root / f"btc-funding-{SWAP_ID}.json"

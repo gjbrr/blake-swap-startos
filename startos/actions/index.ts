@@ -19,8 +19,10 @@ import { fundBlake } from './fundBlake'
 import { publishBlakeFunding } from './publishBlakeFunding'
 import { receiveBtcFunding } from './receiveBtcFunding'
 import { resumeSwap } from './resumeSwap'
+import { refundBlake } from './refundBlake'
 import { reconcileSwap } from './reconcileSwap'
 import { syncFunding } from './syncFunding'
+import { syncSettlement } from './syncSettlement'
 import { viewMarket } from './viewMarket'
 import { swapStatus } from './swapStatus'
 import { showParticipantIdentity } from './showParticipantIdentity'
@@ -64,7 +66,9 @@ export const actions = sdk.Actions.of()
   .addAction(receiveBtcFunding)
   .addAction(reconcileSwap)
   .addAction(syncFunding)
+  .addAction(syncSettlement)
   .addAction(benchmarkBtcScan)
   .addAction(resumableBtcScan)
+  .addAction(refundBlake)
   .addAction(resumeSwap)
   .addAction(checkBtcRpc)

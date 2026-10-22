@@ -1204,6 +1204,28 @@ def find_confirmed_htlc_spend(
 
         start_height = int(start_height)
 
+    #
+    # Fast path: a confirmed, currently unspent HTLC outpoint
+    # cannot have a confirmed or mempool spender on this node.
+    #
+    # Preserve historical settlement recovery when gettxout is
+    # unavailable (None). RPC errors must propagate, not be
+    # mistaken for proof of an unspent output.
+    #
+    current_utxo = cli(
+        "gettxout",
+        funding_txid,
+        funding_vout,
+        True,
+    )
+
+    if current_utxo is not None:
+        if not isinstance(current_utxo, dict):
+            raise RuntimeError(
+                "SECURITY FAILURE: invalid HTLC gettxout response"
+            )
+        return None
+
     tip_height = int(
         cli("getblockcount")
     )

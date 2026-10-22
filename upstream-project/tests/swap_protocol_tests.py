@@ -278,7 +278,9 @@ def swap_cmd(
 def btc_cli(*args, wallet=None):
     cmd = [
         BTC_CLI,
+        "-regtest",
         f"-datadir={BTC_DATADIR}",
+        "-rpcport=19443",
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
@@ -296,6 +298,7 @@ def blake_cli(*args, wallet=None):
         BLAKE_CLI,
         "-regtest",
         f"-datadir={BLAKE_DATADIR}",
+        "-rpcport=18443",
     ]
     if wallet:
         cmd.append(f"-rpcwallet={wallet}")
