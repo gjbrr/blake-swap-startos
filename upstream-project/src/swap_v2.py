@@ -2105,8 +2105,135 @@ def command_fund_ready_swap(args):
     command_fund_blake(ns)
 
 
+def _witness_sighash_types(tx):
+    """
+    Yield the signature hash type byte of every input's DER signature.
+
+    The funding wallet is P2WPKH ([signature, pubkey]); a P2WSH witness puts
+    the signature among the items the script consumes, with the witness script
+    last. The last byte of a DER signature record is the type the verifier
+    reads.
+    """
+    for vin in tx.get("vin", []):
+        witness = vin.get("txinwitness") or []
+
+        if not witness:
+            raise RuntimeError(
+                "SECURITY FAILURE: funding input has no witness; "
+                "its signature type cannot be checked"
+            )
+
+        found = None
+
+        for index, item in enumerate(witness):
+            try:
+                raw = bytes.fromhex(item)
+            except ValueError:
+                continue
+
+            if index == len(witness) - 1 and len(witness) > 2:
+                # The final item of a P2WSH witness is the script.
+                continue
+
+            if len(raw) < 9 or raw[0] != 0x30:
+                continue
+
+            # DER: 0x30 | length | ... | sighash. raw[1] is the DER length,
+            # which is len(raw) - 3 once the trailing type byte is counted.
+            if raw[1] != len(raw) - 3:
+                continue
+
+            found = raw[-1]
+            break
+
+        if found is None:
+            raise RuntimeError(
+                "SECURITY FAILURE: no DER signature found in a "
+                "funding input witness"
+            )
+
+        yield found
+
+
+def require_funding_signature_type(tx, unified):
+    """
+    The taker's funding check.
+
+    BLAKE funding must opt into SIGHASH_UNIFIED (0x21), so the spend is
+    invalid on Bitcoin. BTC funding must not, because Bitcoin cannot verify
+    the unified message. The checks are about the transaction, not the coin's
+    ancestry.
+    """
+    for sighash in _witness_sighash_types(tx):
+        if unified and sighash != 0x21:
+            raise RuntimeError(
+                "SECURITY FAILURE: BLAKE funding input is signed with "
+                f"sighash {sighash:#x}, not the XBT unified type 0x21; "
+                "a shared coin spent this way is valid on Bitcoin"
+            )
+
+        if not unified and sighash == 0x21:
+            raise RuntimeError(
+                "SECURITY FAILURE: BTC funding input is signed with "
+                "SIGHASH_UNIFIED, which Bitcoin does not implement"
+            )
+
+
+def unified_sighash_required():
+    """
+    The swap's XBT leg is always XBT-only. The only exception is the local
+    regtest rig, where the fork is not scheduled and the node would reject an
+    opted-in signature; the rig sets BLAKE_SWAP_REGTEST=1.
+    """
+    if os.environ.get("BLAKE_SWAP_REGTEST", "") == "1":
+        return False
+
+    try:
+        chain = str(
+            blake_cli("getblockchaininfo").get("chain", "")
+        ).lower()
+    except Exception:
+        # Fail closed: if the network cannot be read, require the mainnet rule.
+        return True
+
+    return chain != "regtest"
+
+
+def assert_no_walletoldsigs():
+    """
+    -walletoldsigs is not allowed on the XBT node used by the app or gateway.
+
+    The XBT wallet must always sign SIGHASH_UNIFIED; the option is the only way
+    to give that up. The config is checked when it is local; a remote node is
+    still covered by the taker's funding check.
+    """
+    conf = Path(BLAKE_DATADIR) / "bitcoin.conf"
+
+    if not conf.is_file():
+        return
+
+    for line in conf.read_text().splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        key, _, value = line.partition("=")
+
+        if key.strip().lower() != "walletoldsigs":
+            continue
+
+        if value.strip().lower() not in ("", "0", "false", "no"):
+            raise RuntimeError(
+                "SECURITY FAILURE: walletoldsigs=1 is set on the XBT node; "
+                "the XBT wallet must always sign SIGHASH_UNIFIED"
+            )
+
+
 @serialized_funding("blake")
 def command_fund_blake(args):
+    assert_no_walletoldsigs()
+
     swap = load_swap(
         args.swap_id,
         role="alice",
@@ -4403,6 +4530,8 @@ def command_publish_blake_funded(args):
     print("PASS: secret_hex was NOT published")
 
 def command_receive_blake_funded(args):
+    assert_no_walletoldsigs()
+
     swap = load_swap(
         args.swap_id,
         role="bob",
@@ -4596,6 +4725,18 @@ def command_receive_blake_funded(args):
     swap.blake_funding_blockhash = (
         funding_blockhash
     )
+
+    if unified_sighash_required():
+        funding_tx = blake_cli(
+            "getrawtransaction",
+            swap.blake_funding_txid,
+            True,
+            funding_blockhash,
+        )
+        require_funding_signature_type(
+            funding_tx,
+            unified=True,
+        )
 
     swap.transition(
         State.BLAKE_FUNDED
@@ -5311,6 +5452,18 @@ def command_receive_btc_funded(args):
     swap.btc_funding_blockhash = (
         funding_blockhash
     )
+
+    if unified_sighash_required():
+        funding_tx = btc_cli(
+            "getrawtransaction",
+            swap.btc_funding_txid,
+            True,
+            funding_blockhash,
+        )
+        require_funding_signature_type(
+            funding_tx,
+            unified=False,
+        )
 
     swap.transition(
         State.BTC_FUNDED
@@ -19347,6 +19500,12 @@ def main():
 
     # Parse only AFTER every command has been registered.
     args = parser.parse_args()
+
+    # The XBT wallet must never fall back to legacy signatures. Check the local
+    # config once before any command; a remote node is covered by the taker's
+    # funding check.
+    assert_no_walletoldsigs()
+
     args.func(args)
 
 
