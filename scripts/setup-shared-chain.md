@@ -82,6 +82,35 @@ Useful options: `--core-datadir`, `--mode hardlink|reflink`, `--rpc-port`,
 The generated config keeps `maxconnections=16` and `dbcache=1200` so the Core
 node leaves room for a co-resident Knots node.
 
+### Mempool size
+
+The swap's provenance check asks the **opposite chain's mempool** whether a
+transaction is still there. A transaction enters a mempool only after that node
+has validated it, so a low-fee transaction sitting far back in the backlog is
+still valid; if it is evicted, the check loses that evidence. The script writes:
+
+```
+maxmempool=1024
+persistmempool=1
+```
+
+Use `--maxmempool 500` if memory is tight; 500 MiB is the minimum for a mainnet
+backlog, and 1 GiB is the safer default. `persistmempool=1` keeps the mempool
+across restarts.
+
+The two chains do **not** need the same size:
+
+| node | `maxmempool` | why |
+|---|---:|---|
+| Bitcoin Core (BTC) | 1024 MiB | a >500 MB backlog has been observed; 300 MiB has evicted low-fee transactions the provenance check needs to see |
+| BLAKE2b Knots (XBT) | 100 MiB | the fork's mempool almost never has a meaningful backlog; 100 MiB is ample and leaves memory for the chain and filter index |
+
+Set the Knots node's `maxmempool=100` in its own package configuration (or
+`bitcoin.conf`); this script only writes the Core config. Both nodes should also
+have `persistmempool=1`, and `txindex=1` if a caller needs to look up a confirmed
+transaction by txid (the swap provenance guard does; the mempool query itself
+does not require it).
+
 Requirements: same filesystem for both datadirs, the Knots node running with
 RPC access, `python3`, and a `bitcoin-cli` next to the Core binary.
 

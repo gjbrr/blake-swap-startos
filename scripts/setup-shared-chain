@@ -70,6 +70,13 @@ CORE_RPC_PORT=8432
 CORE_P2P_PORT=8433
 CORE_DBCACHE=1200
 CORE_MAXCONN=16
+# A deep mempool is part of the swap's provenance check: the guard asks the
+# opposite chain whether a transaction is still in its mempool. A low-fee
+# transaction far back in the backlog is still valid, and evicting it would
+# turn "valid on both chains" into "not found". Start9 nodes with default
+# 300 MB have evicted such transactions; 500 MB is the minimum, 1 GB is safer.
+CORE_MAXMEMPOOL=1024
+CORE_PERSISTMEMPOOL=1
 MODE=auto                     # auto | hardlink | reflink
 TXINDEX=0                     # opt-in: needed only for arbitrary getrawtransaction
 DRY_RUN=0
@@ -98,6 +105,9 @@ Options:
   --p2p-port N           Core P2P port (default: $CORE_P2P_PORT)
   --dbcache N            Core dbcache in MiB (default: $CORE_DBCACHE)
   --maxconnections N     Core peer limit (default: $CORE_MAXCONN)
+  --maxmempool N         Core mempool size in MiB (default: $CORE_MAXMEMPOOL).
+                         500 is the minimum for a low-fee backlog; 1024 is safer.
+  --no-persistmempool    Do not keep the mempool across restarts
   --mode MODE            auto | hardlink | reflink (default: $MODE)
   --txindex              Also build a full transaction index (~45 GB). Only
                          needed for getrawtransaction by txid, e.g. a gateway
@@ -129,6 +139,8 @@ while [ $# -gt 0 ]; do
         --p2p-port)     CORE_P2P_PORT=$2; shift 2 ;;
         --dbcache)      CORE_DBCACHE=$2; shift 2 ;;
         --maxconnections) CORE_MAXCONN=$2; shift 2 ;;
+        --maxmempool)   CORE_MAXMEMPOOL=$2; shift 2 ;;
+        --no-persistmempool) CORE_PERSISTMEMPOOL=0; shift ;;
         --mode)         MODE=$2; shift 2 ;;
         --txindex)      TXINDEX=1; shift ;;
         --dry-run)      DRY_RUN=1; shift ;;
@@ -140,6 +152,7 @@ done
 
 case $MODE in auto|hardlink|reflink) ;; *) die "--mode must be auto, hardlink or reflink" ;; esac
 case $FORK_HEIGHT in ''|*[!0-9]*) die "--fork-height must be a number" ;; esac
+case $CORE_MAXMEMPOOL in ''|*[!0-9]*|0) die "--maxmempool must be a positive number of MiB" ;; esac
 LAST_SHARED_HEIGHT=$((FORK_HEIGHT - 1))
 [ "$LAST_SHARED_HEIGHT" -ge 0 ] || die "--fork-height must be >= 1"
 command -v python3 >/dev/null || die "python3 is required for the block scan"
@@ -405,6 +418,12 @@ dbcache=$CORE_DBCACHE
 
 # Keep the peer count modest when both nodes share one link.
 maxconnections=$CORE_MAXCONN
+
+# The provenance guard asks the opposite chain whether a transaction is still
+# in its mempool. A deep, persistent mempool keeps a low-fee transaction far
+# back in the backlog queryable; 300 MB (the default) is too small on mainnet.
+maxmempool=$CORE_MAXMEMPOOL
+persistmempool=$CORE_PERSISTMEMPOOL
 
 # Pre-fork history was validated by the Knots node and is checkpointed at
 # $LAST_SHARED_HEIGHT; skip script checks below it, validate $FORK_HEIGHT.. normally.
