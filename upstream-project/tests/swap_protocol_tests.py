@@ -1871,6 +1871,11 @@ def test_race() -> None:
 
             env["BLAKE_SWAP_TRANSPORT"] = "file"
             env["BLAKE_SWAP_NOSTR_RELAYS"] = "ws://127.0.0.1:1"
+            env["BLAKE_SWAP_BTC_CLI"] = str(BTC_CLI)
+            env["BLAKE_SWAP_BTC_DATADIR"] = str(BTC_DATADIR)
+            env["BLAKE_SWAP_BLAKE_CLI"] = str(BLAKE_CLI)
+            env["BLAKE_SWAP_BLAKE_DATADIR"] = str(BLAKE_DATADIR)
+            env["BLAKE_SWAP_REGTEST"] = "1"
 
             env["BLAKE_SWAP_ROLE"] = "bob"
             env["BLAKE_SWAP_STATE_DIR"] = str(
