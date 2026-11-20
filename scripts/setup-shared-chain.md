@@ -113,7 +113,10 @@ does not require it).
 
 **Do not set `walletoldsigs=1` on the BLAKE2b/Knots node used for swaps.** Its
 default signatures opt into `SIGHASH_UNIFIED`, which is what makes an XBT spend
-invalid on Bitcoin; `walletoldsigs` gives that replay protection up. Bitcoin
+invalid on Bitcoin; `walletoldsigs` gives that replay protection up. The
+tinywallet XBT client opts in for `Send` and PSBTs as well, and includes pre-fork
+coins in its spendable set because the signature makes the spend XBT-only. The
+BTC wallet has no unified bit and still refuses pre-fork/shared coins. Bitcoin
 Core has no equivalent opt-in, so a shared BTC coin must either be native (a
 post-fork BTC coinbase descendant) or be spent in a transaction that is invalid
 on XBT for another consensus reason. The swap's current funding guard therefore
