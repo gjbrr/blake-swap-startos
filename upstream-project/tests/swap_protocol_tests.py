@@ -59,11 +59,40 @@ BOB_DIR = BOB_BASE
 MESSAGE_DIR = TEST_ROOT / "messages"
 
 
-BTC_CLI = Path("/home/gary/bitcoin-core/build/bin/bitcoin-cli")
-BTC_DATADIR = Path("/home/gary/bitcoin-swap-regtest")
+# The local rig's description wins; the historical /home/gary paths remain the
+# fallback for the environment this harness was originally written on.
+RIG_FILE = Path(
+    os.environ.get(
+        "BLAKE_SWAP_RIG_FILE",
+        Path.home() / ".blake-swap-test" / "rig-env.json",
+    )
+)
 
-BLAKE_CLI = Path("/home/gary/bitcoin-blake-rc2/build-rc2/bin/bitcoin-cli")
-BLAKE_DATADIR = Path("/home/gary/blake-swap-regtest")
+RIG = {}
+
+if RIG_FILE.is_file():
+    try:
+        RIG = json.loads(RIG_FILE.read_text())
+    except Exception:
+        RIG = {}
+
+BTC_CLI = Path(os.environ.get(
+    "BLAKE_SWAP_BTC_CLI",
+    RIG.get("btc_cli", "/home/gary/bitcoin-core/build/bin/bitcoin-cli"),
+))
+BTC_DATADIR = Path(os.environ.get(
+    "BLAKE_SWAP_BTC_DATADIR",
+    RIG.get("btc_datadir", "/home/gary/bitcoin-swap-regtest"),
+))
+
+BLAKE_CLI = Path(os.environ.get(
+    "BLAKE_SWAP_BLAKE_CLI",
+    RIG.get("blake_cli", "/home/gary/bitcoin-blake-rc2/build-rc2/bin/bitcoin-cli"),
+))
+BLAKE_DATADIR = Path(os.environ.get(
+    "BLAKE_SWAP_BLAKE_DATADIR",
+    RIG.get("blake_datadir", "/home/gary/blake-swap-regtest"),
+))
 
 ALICE_WALLET = "alice"
 BOB_WALLET = "bob"
@@ -139,6 +168,14 @@ def run(cmd, *, env=None, expect_ok=True, echo=False) -> subprocess.CompletedPro
         merged.pop(key, None)
 
     merged["BLAKE_SWAP_TRANSPORT"] = "file"
+
+    # Keep the engine pointed at the same two nodes the harness drives.
+    merged.setdefault("BLAKE_SWAP_BTC_CLI", str(BTC_CLI))
+    merged.setdefault("BLAKE_SWAP_BTC_DATADIR", str(BTC_DATADIR))
+    merged.setdefault("BLAKE_SWAP_BLAKE_CLI", str(BLAKE_CLI))
+    merged.setdefault("BLAKE_SWAP_BLAKE_DATADIR", str(BLAKE_DATADIR))
+    # This harness is a regtest test; the fork is not scheduled there.
+    merged.setdefault("BLAKE_SWAP_REGTEST", "1")
 
     if env:
         merged.update(env)
