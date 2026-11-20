@@ -111,6 +111,14 @@ have `persistmempool=1`, and `txindex=1` if a caller needs to look up a confirme
 transaction by txid (the swap provenance guard does; the mempool query itself
 does not require it).
 
+**Do not set `walletoldsigs=1` on the BLAKE2b/Knots node used for swaps.** Its
+default signatures opt into `SIGHASH_UNIFIED`, which is what makes an XBT spend
+invalid on Bitcoin; `walletoldsigs` gives that replay protection up. Bitcoin
+Core has no equivalent opt-in, so a shared BTC coin must either be native (a
+post-fork BTC coinbase descendant) or be spent in a transaction that is invalid
+on XBT for another consensus reason. The swap's current funding guard therefore
+still refuses shared coins; the chain-bound funding path is the next step.
+
 Requirements: same filesystem for both datadirs, the Knots node running with
 RPC access, `python3`, and a `bitcoin-cli` next to the Core binary.
 
