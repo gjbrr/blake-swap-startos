@@ -119,8 +119,9 @@ and the taker rejects a legacy BLAKE funding. The tinywallet XBT client always
 opts in for `Send` and PSBTs; it has no legacy mode. The BTC wallet has no
 unified bit and remains legacy.
 
-The Python engine's local regtest rig sets `BLAKE_SWAP_REGTEST=1`, because the
-fork is not scheduled there; a real deployment must not set it. Bitcoin
+The Python engine skips the taker checks when the chain reports `regtest`,
+because the fork is not scheduled there. `BLAKE_SWAP_REGTEST=1` is the explicit
+test bypass; a real deployment must not set it. Bitcoin
 Core has no equivalent opt-in, so a shared BTC coin must either be native (a
 post-fork BTC coinbase descendant) or be spent in a transaction that is invalid
 on XBT for another consensus reason. The swap's current funding guard therefore
