@@ -2179,6 +2179,29 @@ def require_funding_signature_type(tx, unified):
             )
 
 
+def assert_funding_signature(cli, txid, blockhash, unified):
+    """
+    Fetch a confirmed funding transaction and apply the taker's type check.
+
+    Used by the receive path and by sync-funding recovery, so a recovered
+    funding cannot bypass the check.
+    """
+    if not unified_sighash_required():
+        return
+
+    tx = cli(
+        "getrawtransaction",
+        txid,
+        True,
+        blockhash,
+    )
+
+    require_funding_signature_type(
+        tx,
+        unified=unified,
+    )
+
+
 def unified_sighash_required():
     """
     The swap's XBT leg is always XBT-only. The only exception is the local
@@ -14822,6 +14845,13 @@ def command_sync_funding(args):
                 "blockhash"
             ]
 
+            assert_funding_signature(
+                blake_cli,
+                swap.blake_funding_txid,
+                swap.blake_funding_blockhash,
+                True,
+            )
+
             swap.transition(
                 State.BLAKE_FUNDED
             )
@@ -14908,6 +14938,13 @@ def command_sync_funding(args):
             swap.btc_funding_blockhash = recovered[
                 "blockhash"
             ]
+
+            assert_funding_signature(
+                btc_cli,
+                swap.btc_funding_txid,
+                swap.btc_funding_blockhash,
+                False,
+            )
 
             swap.transition(
                 State.BTC_FUNDED
